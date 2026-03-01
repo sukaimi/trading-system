@@ -1,0 +1,91 @@
+"""Trading System — Main entry point.
+
+Loads environment, initializes all Tier 0 modules, registers the
+heartbeat schedule, and runs the event loop. Exits cleanly on
+SIGINT/SIGTERM.
+"""
+
+import signal
+import sys
+import time
+
+import schedule
+from dotenv import load_dotenv
+
+from core.heartbeat import Heartbeat
+from core.logger import setup_logger
+from core.portfolio import PortfolioState
+from core.risk_manager import RiskManager
+from core.executor import Executor
+from tools.telegram_bot import TelegramNotifier
+
+log = setup_logger("trading.main")
+
+# Global flag for graceful shutdown
+_running = True
+
+
+def _shutdown(signum, frame):
+    global _running
+    sig_name = signal.Signals(signum).name
+    log.info("Received %s — shutting down gracefully", sig_name)
+    _running = False
+
+
+def main():
+    global _running
+
+    # 1. Load environment
+    load_dotenv()
+    log.info("Environment loaded")
+
+    # 2. Initialize portfolio state (load persisted state if available)
+    portfolio = PortfolioState()
+    portfolio.load()
+    log.info("Portfolio initialized — equity: $%.2f", portfolio.equity)
+
+    # 3. Initialize Tier 0 modules
+    risk_manager = RiskManager()
+    log.info("Risk manager initialized")
+
+    executor = Executor()
+    log.info("Executor initialized (paper_mode=%s)", executor.paper_mode)
+
+    telegram = TelegramNotifier()
+    heartbeat = Heartbeat(telegram_notifier=telegram)
+    log.info("Heartbeat monitor initialized")
+
+    # 4. Register heartbeat on schedule (every 5 minutes)
+    def run_heartbeat():
+        status = heartbeat.check()
+        if not status.all_healthy:
+            log.warning("Heartbeat reported failures: %s", status.failures)
+
+    schedule.every(5).minutes.do(run_heartbeat)
+    log.info("Heartbeat scheduled every 5 minutes")
+
+    # 5. Register signal handlers for graceful shutdown
+    signal.signal(signal.SIGINT, _shutdown)
+    signal.signal(signal.SIGTERM, _shutdown)
+
+    # 6. Run initial heartbeat
+    log.info("Running initial heartbeat check...")
+    run_heartbeat()
+
+    # 7. Event loop
+    log.info("Trading system started — entering main loop")
+    try:
+        while _running:
+            schedule.run_pending()
+            time.sleep(1)
+    except KeyboardInterrupt:
+        pass
+
+    # 8. Cleanup
+    log.info("Persisting portfolio state...")
+    portfolio.persist()
+    log.info("Trading system stopped")
+
+
+if __name__ == "__main__":
+    main()

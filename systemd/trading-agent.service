@@ -1,0 +1,25 @@
+[Unit]
+Description=Autonomous AI Trading Agent
+After=network.target ib-gateway.service
+Wants=ib-gateway.service
+
+[Service]
+Type=simple
+User=trader
+WorkingDirectory=/opt/trading-system
+ExecStart=/opt/trading-system/venv/bin/python main.py
+Restart=always
+RestartSec=10
+EnvironmentFile=/opt/trading-system/.env
+
+# Logging
+StandardOutput=append:/opt/trading-system/data/logs/trading.log
+StandardError=append:/opt/trading-system/data/logs/trading.log
+
+# Security
+NoNewPrivileges=true
+ProtectSystem=strict
+ReadWritePaths=/opt/trading-system/data
+
+[Install]
+WantedBy=multi-user.target

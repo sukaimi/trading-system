@@ -1,0 +1,16 @@
+[Unit]
+Description=Interactive Brokers Gateway
+After=network.target
+
+[Service]
+Type=simple
+User=trader
+ExecStart=/opt/ibgateway/ibgateway
+Restart=always
+RestartSec=30
+
+# Security — bind to localhost only
+Environment=IB_HOST=127.0.0.1
+
+[Install]
+WantedBy=multi-user.target

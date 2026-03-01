@@ -1,0 +1,23 @@
+{
+  "kill_thresholds": {
+    "min_challenges_for_kill": 4,
+    "crowded_trade_kill_score": 0.8,
+    "max_correlation_post_trade": 0.50
+  },
+  "challenge_weights": {
+    "crowded_trade": 1.0,
+    "assumption_stress_test": 1.0,
+    "timing": 1.0,
+    "correlation_trap": 1.0,
+    "base_rate": 1.0,
+    "second_order_effects": 1.0,
+    "size_check": 1.0
+  },
+  "confidence_size_map": {
+    "0.6-0.7": 3.0,
+    "0.7-0.8": 5.0,
+    "0.8+": 7.0
+  },
+  "target_kill_rate_pct": 50,
+  "target_false_kill_rate_pct": 20
+}

@@ -1,0 +1,16 @@
+{
+  "min_confidence_for_trade": 0.6,
+  "max_open_positions": 3,
+  "signal_weights": {
+    "fundamental": 0.35,
+    "technical": 0.40,
+    "cross_asset": 0.25
+  },
+  "asset_allocation_limits": {
+    "BTC": 0.30,
+    "ETH": 0.20,
+    "GLDM": 0.30,
+    "SLV": 0.20
+  },
+  "min_risk_reward_ratio": 1.5
+}

@@ -1,0 +1,14 @@
+{
+  "signal_weights": {
+    "central_bank": 0.9,
+    "geopolitical": 0.8,
+    "regulatory_crypto": 0.8,
+    "inflation_data": 0.7,
+    "whale_movement": 0.5,
+    "analyst_opinion": 0.3
+  },
+  "scan_frequency_minutes": 30,
+  "min_signal_threshold": 0.4,
+  "weekend_signal_penalty": 0.15,
+  "max_alerts_per_hour": 5
+}
