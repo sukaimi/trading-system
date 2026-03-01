@@ -6,6 +6,21 @@ import tempfile
 
 import pytest
 
+from core.llm_client import LLMClient
+from core.schemas import (
+    Asset,
+    ConfirmingSignal,
+    ConfirmingSignals,
+    DevilsVerdict,
+    Direction,
+    Sentiment,
+    SignalAlert,
+    SignalCategory,
+    TradeThesis,
+    Urgency,
+    Verdict,
+)
+
 
 @pytest.fixture
 def risk_config():
@@ -87,3 +102,62 @@ def empty_portfolio_state():
 def tmp_state_file(tmp_path):
     """Temporary file path for portfolio state persistence tests."""
     return str(tmp_path / "test_portfolio_state.json")
+
+
+# ── Phase 2 shared fixtures ──────────────────────────────────────────
+
+
+@pytest.fixture
+def mock_llm_client():
+    """LLM client in mock mode for testing without API keys."""
+    return LLMClient(mock_mode=True)
+
+
+@pytest.fixture
+def sample_signal_alert():
+    """A typical BTC bullish signal alert."""
+    return SignalAlert(
+        asset=Asset.BTC,
+        signal_strength=0.8,
+        headline="BTC breaks resistance at 100k",
+        sentiment=Sentiment.BULLISH,
+        category=SignalCategory.CRYPTO_SPECIFIC,
+        new_information="First break above 100k with volume",
+        urgency=Urgency.HIGH,
+        confidence_in_classification=0.85,
+    )
+
+
+@pytest.fixture
+def sample_trade_thesis():
+    """A valid BTC long trade thesis."""
+    return TradeThesis(
+        asset=Asset.BTC,
+        direction=Direction.LONG,
+        confidence=0.75,
+        thesis="BTC breaking out above key resistance with strong volume",
+        confirming_signals=ConfirmingSignals(
+            fundamental=ConfirmingSignal(present=True, description="ETF inflows increasing"),
+            technical=ConfirmingSignal(present=True, description="RSI bullish divergence"),
+            cross_asset=ConfirmingSignal(present=False),
+        ),
+        entry_trigger="Break above 100000",
+        invalidation_level="95000",
+        suggested_position_pct=5.0,
+        risk_reward_ratio="1:3",
+        supporting_data={"current_price": 101000, "rsi_14": 62},
+        what_could_go_wrong=["Fakeout", "Regulatory news"],
+    )
+
+
+@pytest.fixture
+def sample_devils_verdict():
+    """An APPROVED_WITH_MODIFICATION verdict."""
+    return DevilsVerdict(
+        original_thesis_id="test_thesis_001",
+        verdict=Verdict.APPROVED_WITH_MODIFICATION,
+        flags_raised=2,
+        modifications=["Reduce position from 5% to 4%", "Tighten stop to 96000"],
+        confidence_adjusted=0.65,
+        final_reasoning="Thesis valid but crowded — reduce exposure",
+    )

@@ -1,0 +1,221 @@
+"""Tests for core/pipeline.py"""
+
+from unittest.mock import MagicMock, patch
+
+import pytest
+
+from core.llm_client import LLMClient
+from core.pipeline import TradingPipeline
+from core.portfolio import PortfolioState
+from core.risk_manager import RiskManager
+from core.schemas import (
+    Asset,
+    ConfirmingSignal,
+    ConfirmingSignals,
+    DevilsVerdict,
+    Direction,
+    Sentiment,
+    SignalAlert,
+    SignalCategory,
+    TradeThesis,
+    Urgency,
+    Verdict,
+)
+from tools.telegram_bot import TelegramNotifier
+
+
+@pytest.fixture
+def risk_config():
+    return {
+        "max_position_pct": 7.0,
+        "max_daily_loss_pct": 5.0,
+        "max_total_drawdown_pct": 15.0,
+        "max_open_positions": 3,
+        "max_correlation": 0.50,
+        "stop_loss_atr_mult": 2.0,
+        "base_risk_per_trade_pct": 2.0,
+    }
+
+
+@pytest.fixture
+def pipeline(risk_config):
+    portfolio = PortfolioState()
+    risk_manager = RiskManager(config=risk_config)
+    executor = MagicMock()
+    telegram = MagicMock()
+    llm = LLMClient(mock_mode=True)
+
+    return TradingPipeline(
+        portfolio=portfolio,
+        risk_manager=risk_manager,
+        executor=executor,
+        telegram=telegram,
+        llm_client=llm,
+    )
+
+
+@pytest.fixture
+def btc_signal():
+    return SignalAlert(
+        asset=Asset.BTC,
+        signal_strength=0.8,
+        headline="BTC breaks 100k",
+        sentiment=Sentiment.BULLISH,
+        category=SignalCategory.CRYPTO_SPECIFIC,
+        new_information="New ATH",
+        urgency=Urgency.HIGH,
+        confidence_in_classification=0.8,
+    )
+
+
+class TestRunNewsScan:
+    def test_returns_list(self, pipeline):
+        result = pipeline.run_news_scan()
+        assert isinstance(result, list)
+
+    def test_handles_error(self, pipeline):
+        # Pipeline handles errors gracefully
+        mock_scout = MagicMock()
+        mock_scout.scan.side_effect = Exception("scan failed")
+        pipeline._news_scout = mock_scout
+        result = pipeline.run_news_scan()
+        assert result == []
+
+
+class TestProcessSingleSignal:
+    def test_no_thesis_returns_no_trade(self, pipeline, btc_signal):
+        # Mock analyst returns None
+        pipeline._analyst = MagicMock()
+        pipeline._analyst.analyze_signal.return_value = None
+        result = pipeline.process_single_signal(btc_signal)
+        assert result["outcome"] == "no_trade"
+
+    def test_killed_trade(self, pipeline, btc_signal):
+        # Analyst returns thesis, devil kills it
+        thesis = TradeThesis(
+            asset=Asset.BTC, direction=Direction.LONG, confidence=0.7,
+            thesis="test", suggested_position_pct=5.0,
+        )
+        killed_verdict = DevilsVerdict(
+            original_thesis_id="x", verdict=Verdict.KILLED,
+            confidence_adjusted=0.0, fatal_flaws=["no edge"],
+        )
+        pipeline._analyst = MagicMock()
+        pipeline._analyst.analyze_signal.return_value = thesis
+        pipeline._devil = MagicMock()
+        pipeline._devil.challenge.return_value = killed_verdict
+        pipeline._journal = MagicMock()
+
+        result = pipeline.process_single_signal(btc_signal)
+        assert result["outcome"] == "killed"
+
+    def test_risk_rejected(self, pipeline, btc_signal):
+        thesis = TradeThesis(
+            asset=Asset.BTC, direction=Direction.LONG, confidence=0.7,
+            thesis="test", suggested_position_pct=5.0,
+            invalidation_level="62000",
+            supporting_data={"current_price": 65000},
+        )
+        approved_verdict = DevilsVerdict(
+            original_thesis_id="x", verdict=Verdict.APPROVED,
+            confidence_adjusted=0.65,
+        )
+        pipeline._analyst = MagicMock()
+        pipeline._analyst.analyze_signal.return_value = thesis
+        pipeline._devil = MagicMock()
+        pipeline._devil.challenge.return_value = approved_verdict
+        pipeline._journal = MagicMock()
+
+        # Fill portfolio to max positions → risk rejects
+        for i in range(3):
+            pipeline._portfolio.add_position({
+                "trade_id": f"t{i}", "asset": f"A{i}",
+                "direction": "long", "entry_price": 100, "position_size_pct": 3,
+            })
+
+        result = pipeline.process_single_signal(btc_signal)
+        assert result["outcome"] == "risk_rejected"
+
+    def test_execution_error(self, pipeline, btc_signal):
+        thesis = TradeThesis(
+            asset=Asset.BTC, direction=Direction.LONG, confidence=0.7,
+            thesis="test", suggested_position_pct=5.0,
+            invalidation_level="62000",
+            supporting_data={"current_price": 65000},
+        )
+        verdict = DevilsVerdict(
+            original_thesis_id="x", verdict=Verdict.APPROVED,
+            confidence_adjusted=0.65,
+        )
+        pipeline._analyst = MagicMock()
+        pipeline._analyst.analyze_signal.return_value = thesis
+        pipeline._devil = MagicMock()
+        pipeline._devil.challenge.return_value = verdict
+        pipeline._journal = MagicMock()
+        pipeline._executor = MagicMock()
+        pipeline._executor.execute.return_value = {"type": "order_error", "error": "IBKR not connected"}
+
+        result = pipeline.process_single_signal(btc_signal)
+        assert result["outcome"] == "execution_error"
+
+    def test_successful_execution(self, pipeline, btc_signal):
+        thesis = TradeThesis(
+            asset=Asset.BTC, direction=Direction.LONG, confidence=0.7,
+            thesis="test", suggested_position_pct=5.0,
+            invalidation_level="62000",
+            supporting_data={"current_price": 65000},
+        )
+        verdict = DevilsVerdict(
+            original_thesis_id="x", verdict=Verdict.APPROVED,
+            confidence_adjusted=0.65,
+        )
+        pipeline._analyst = MagicMock()
+        pipeline._analyst.analyze_signal.return_value = thesis
+        pipeline._devil = MagicMock()
+        pipeline._devil.challenge.return_value = verdict
+        pipeline._journal = MagicMock()
+        pipeline._executor = MagicMock()
+        pipeline._executor.execute.return_value = {
+            "type": "order_confirmation",
+            "order_id": 123,
+            "asset": "BTC",
+            "direction": "long",
+            "quantity": 0.01,
+            "fill_price": 65100.0,
+            "status": "Filled",
+        }
+
+        result = pipeline.process_single_signal(btc_signal)
+        assert result["outcome"] == "executed"
+        assert result["fill_price"] == 65100.0
+
+
+class TestRunScheduledAnalysis:
+    def test_returns_list(self, pipeline):
+        result = pipeline.run_scheduled_analysis("asian_open")
+        assert isinstance(result, list)
+
+    def test_handles_error(self, pipeline):
+        pipeline._analyst = MagicMock()
+        pipeline._analyst.scheduled_analysis.side_effect = Exception("fail")
+        result = pipeline.run_scheduled_analysis("asian_open")
+        assert result == []
+
+
+class TestBuildExecutionOrder:
+    def test_order_has_required_fields(self, pipeline):
+        thesis = TradeThesis(
+            asset=Asset.ETH, direction=Direction.SHORT, confidence=0.8,
+            thesis="test", suggested_position_pct=7.0,
+            invalidation_level="3500",
+            supporting_data={"current_price": 3200},
+        )
+        verdict = DevilsVerdict(
+            original_thesis_id="x", verdict=Verdict.APPROVED,
+            confidence_adjusted=0.75,
+        )
+        order = pipeline._build_execution_order(thesis, verdict)
+        assert order["asset"] == "ETH"
+        assert order["direction"] == "short"
+        assert order["stop_loss"] == 3500.0
+        assert order["quantity"] > 0

@@ -1,8 +1,8 @@
 """Trading System — Main entry point.
 
-Loads environment, initializes all Tier 0 modules, registers the
-heartbeat schedule, and runs the event loop. Exits cleanly on
-SIGINT/SIGTERM.
+Loads environment, initializes all Tier 0 modules and the intelligence
+pipeline, registers schedules, and runs the event loop.
+Exits cleanly on SIGINT/SIGTERM.
 """
 
 import signal
@@ -12,11 +12,13 @@ import time
 import schedule
 from dotenv import load_dotenv
 
+from core.executor import Executor
 from core.heartbeat import Heartbeat
+from core.llm_client import LLMClient
 from core.logger import setup_logger
+from core.pipeline import TradingPipeline
 from core.portfolio import PortfolioState
 from core.risk_manager import RiskManager
-from core.executor import Executor
 from tools.telegram_bot import TelegramNotifier
 
 log = setup_logger("trading.main")
@@ -52,27 +54,66 @@ def main():
     log.info("Executor initialized (paper_mode=%s)", executor.paper_mode)
 
     telegram = TelegramNotifier()
+
+    # 4. Initialize LLM client
+    llm_client = LLMClient()
+    log.info("LLM client initialized (mock_mode=%s)", llm_client.mock_mode)
+
+    # 5. Initialize trading pipeline
+    pipeline = TradingPipeline(
+        portfolio=portfolio,
+        risk_manager=risk_manager,
+        executor=executor,
+        telegram=telegram,
+        llm_client=llm_client,
+    )
+    log.info("Trading pipeline initialized")
+
+    # 6. Initialize heartbeat
     heartbeat = Heartbeat(telegram_notifier=telegram)
     log.info("Heartbeat monitor initialized")
 
-    # 4. Register heartbeat on schedule (every 5 minutes)
+    # 7. Register schedules
     def run_heartbeat():
         status = heartbeat.check()
         if not status.all_healthy:
             log.warning("Heartbeat reported failures: %s", status.failures)
 
-    schedule.every(5).minutes.do(run_heartbeat)
-    log.info("Heartbeat scheduled every 5 minutes")
+    def run_news_scan():
+        log.info("Scheduled news scan starting...")
+        pipeline.run_news_scan()
 
-    # 5. Register signal handlers for graceful shutdown
+    def run_asian_open():
+        log.info("Scheduled Asian Open analysis starting...")
+        pipeline.run_scheduled_analysis("asian_open")
+
+    def run_european_overlap():
+        log.info("Scheduled European Overlap analysis starting...")
+        pipeline.run_scheduled_analysis("european_overlap")
+
+    def run_us_close():
+        log.info("Scheduled US Close analysis starting...")
+        pipeline.run_scheduled_analysis("us_close")
+
+    schedule.every(5).minutes.do(run_heartbeat)
+    schedule.every(30).minutes.do(run_news_scan)
+    schedule.every().day.at("00:00").do(run_asian_open)       # 08:00 SGT
+    schedule.every().day.at("08:00").do(run_european_overlap)  # 16:00 SGT
+    schedule.every().day.at("14:00").do(run_us_close)          # 22:00 SGT
+    log.info("All schedules registered")
+
+    # 8. Register signal handlers for graceful shutdown
     signal.signal(signal.SIGINT, _shutdown)
     signal.signal(signal.SIGTERM, _shutdown)
 
-    # 6. Run initial heartbeat
+    # 9. Run initial checks
     log.info("Running initial heartbeat check...")
     run_heartbeat()
 
-    # 7. Event loop
+    log.info("Running initial news scan...")
+    run_news_scan()
+
+    # 10. Event loop
     log.info("Trading system started — entering main loop")
     try:
         while _running:
@@ -81,7 +122,7 @@ def main():
     except KeyboardInterrupt:
         pass
 
-    # 8. Cleanup
+    # 11. Cleanup
     log.info("Persisting portfolio state...")
     portfolio.persist()
     log.info("Trading system stopped")
