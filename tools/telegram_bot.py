@@ -106,3 +106,53 @@ class TelegramNotifier:
             asyncio.run(self._send_message(text))
         except Exception as e:
             log.error("Failed to send weekly report: %s", e)
+
+    def send_circuit_breaker_alert(self, decision: dict[str, Any]) -> None:
+        """Send circuit breaker alert with decision details."""
+        if not self.enabled:
+            log.debug("Telegram circuit breaker alert (disabled)")
+            return
+
+        triggers = ", ".join(decision.get("triggers_fired", []))
+        text = (
+            "<b>CIRCUIT BREAKER FIRED</b>\n\n"
+            f"Triggers: {triggers}\n"
+            f"Decision: <b>{decision.get('decision', 'UNKNOWN')}</b>\n"
+            f"Reasoning: {decision.get('reasoning', 'N/A')}\n\n"
+            f"Resume conditions: {decision.get('resume_conditions', 'N/A')}\n\n"
+            f"{decision.get('telegram_message', '')}"
+        )
+
+        try:
+            import asyncio
+
+            asyncio.run(self._send_message(text))
+        except Exception as e:
+            log.error("Failed to send circuit breaker alert: %s", e)
+
+    def send_optimization_summary(self, changes: list[dict[str, Any]]) -> None:
+        """Send strategy optimization summary after parameter changes."""
+        if not self.enabled:
+            log.debug("Telegram optimization summary (disabled)")
+            return
+
+        lines = ["<b>STRATEGY UPDATE</b>\n"]
+        for change in changes:
+            agent = change.get("agent", "?")
+            param = change.get("parameter", "?")
+            old = change.get("old_value", "?")
+            new = change.get("new_value", "?")
+            reason = change.get("reason", "")
+            lines.append(f"  {agent}.{param}: {old} → {new}")
+            if reason:
+                lines.append(f"    Reason: {reason}")
+
+        version = changes[-1].get("version", "?") if changes else "?"
+        lines.append(f"\nStrategy version: v{version}")
+
+        try:
+            import asyncio
+
+            asyncio.run(self._send_message("\n".join(lines)))
+        except Exception as e:
+            log.error("Failed to send optimization summary: %s", e)

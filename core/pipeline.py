@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from agents.circuit_breaker_agent import CircuitBreakerAgent
 from agents.devils_advocate import DevilsAdvocate
 from agents.market_analyst import MarketAnalyst
 from agents.news_scout import NewsScout
@@ -55,9 +56,19 @@ class TradingPipeline:
         self._analyst = MarketAnalyst(llm_client=self._llm)
         self._devil = DevilsAdvocate(llm_client=self._llm)
         self._journal = TradeJournal(llm_client=self._llm)
+        self._circuit_breaker = CircuitBreakerAgent(
+            llm_client=self._llm,
+            executor=self._executor,
+            portfolio=self._portfolio,
+            telegram=self._telegram,
+        )
 
     def run_news_scan(self) -> list[SignalAlert]:
         """Run a news scan and process any signals found."""
+        if self._portfolio.halted:
+            log.warning("System halted — skipping news scan")
+            return []
+
         try:
             log.info("Starting news scan...")
             signals = self._news_scout.scan()
@@ -215,8 +226,29 @@ class TradingPipeline:
         )
         return result
 
+    def run_circuit_breaker_check(self, market_data: dict[str, Any] | None = None) -> None:
+        """Run circuit breaker check against current portfolio state."""
+        try:
+            portfolio_state = self._portfolio.snapshot()
+            if market_data is None:
+                market_data = {}
+
+            result = self._circuit_breaker.check(portfolio_state, market_data)
+            if result:
+                log.warning("Circuit breaker triggered: %s", result["triggers_fired"])
+                decision = self._circuit_breaker.escalate_to_opus(
+                    result["triggers_fired"], portfolio_state, market_data
+                )
+                self._circuit_breaker.execute_decision(decision)
+        except Exception as e:
+            log.error("Circuit breaker check failed: %s", e)
+
     def run_scheduled_analysis(self, session: str) -> list[dict[str, Any]]:
         """Run scheduled analysis for all assets and process results."""
+        if self._portfolio.halted:
+            log.warning("System halted — skipping scheduled analysis")
+            return []
+
         try:
             log.info("Running scheduled analysis: %s", session)
             theses = self._analyst.scheduled_analysis(session)

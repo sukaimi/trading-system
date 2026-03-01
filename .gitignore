@@ -32,6 +32,7 @@ Thumbs.db
 data/portfolio_state.json
 data/trade_journal.json
 data/optimization_log.json
+data/circuit_breaker_log.json
 data/logs/*.log
 data/weekly_reviews/*.json
 

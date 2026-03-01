@@ -2,7 +2,7 @@
 
 Takes WeeklyDirective from the Weekly Strategist and updates agent
 parameter JSON files. Supports rollback to previous versions.
-Phase 1 skeleton — full Opus integration in Phase 3.
+Sends Telegram notification after applying changes.
 """
 
 from __future__ import annotations
@@ -24,6 +24,14 @@ VERSION_FILE = os.path.join(CONFIG_DIR, "strategy_version.json")
 
 class SelfOptimizer:
     """Translates Opus strategy directives into actual config changes."""
+
+    def __init__(
+        self,
+        telegram: Any | None = None,
+        portfolio: Any | None = None,
+    ):
+        self._telegram = telegram
+        self._portfolio = portfolio
 
     def apply_directives(self, weekly_directive: dict[str, Any]) -> list[dict[str, Any]]:
         """Apply parameter changes from a weekly directive.
@@ -61,6 +69,13 @@ class SelfOptimizer:
         if changes_applied:
             self._append_to_log(changes_applied, weekly_directive)
             log.info("Applied %d parameter changes", len(changes_applied))
+
+            # Send Telegram notification
+            if self._telegram:
+                try:
+                    self._telegram.send_optimization_summary(changes_applied)
+                except Exception as e:
+                    log.error("Failed to send optimization summary: %s", e)
 
         return changes_applied
 
@@ -113,12 +128,26 @@ class SelfOptimizer:
             with open(OPT_LOG_FILE) as f:
                 log_entries = json.load(f)
 
+        # Populate portfolio value if available
+        portfolio_value = 0.0
+        cumulative_return = 0.0
+        if self._portfolio:
+            try:
+                portfolio_value = getattr(self._portfolio, "equity", 0.0)
+                initial = getattr(self._portfolio, "initial_capital", portfolio_value)
+                if initial > 0:
+                    cumulative_return = (portfolio_value - initial) / initial * 100
+            except Exception:
+                pass
+
         log_entries.append(
             {
                 "version": changes[-1]["version"] if changes else 0,
                 "timestamp": datetime.utcnow().isoformat(),
                 "directive_week": directive.get("week_reviewed", ""),
                 "changes": changes,
+                "portfolio_value_at_change": portfolio_value,
+                "cumulative_return_pct": cumulative_return,
             }
         )
 

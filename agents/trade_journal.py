@@ -151,7 +151,11 @@ class TradeJournal:
         log.info("Recorded killed trade for %s", thesis.asset.value)
         return record
 
-    def assemble_weekly_package(self, week_ending: str) -> dict[str, Any]:
+    def assemble_weekly_package(
+        self,
+        week_ending: str,
+        portfolio_state: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
         """Assemble the weekly input package for the Strategist."""
         entries = self._load_journal()
 
@@ -172,7 +176,7 @@ class TradeJournal:
         win_pcts = [(e.get("outcome", {}).get("pnl_pct", 0) or 0) for e in wins]
         loss_pcts = [(e.get("outcome", {}).get("pnl_pct", 0) or 0) for e in losses]
 
-        return {
+        package: dict[str, Any] = {
             "week_ending": week_ending,
             "trade_summary": {
                 "total_trades": len(trades),
@@ -186,6 +190,47 @@ class TradeJournal:
             },
             "full_trade_journal": week_entries,
         }
+
+        # Portfolio summary (optional — provided when called by WeeklyStrategist)
+        if portfolio_state:
+            equity = portfolio_state.get("equity", 0.0)
+            initial = portfolio_state.get("initial_capital", equity)
+            package["portfolio_summary"] = {
+                "equity": equity,
+                "initial_capital": initial,
+                "return_pct": ((equity - initial) / initial * 100) if initial else 0.0,
+                "drawdown_from_peak_pct": portfolio_state.get("drawdown_from_peak_pct", 0.0),
+                "open_positions": len(portfolio_state.get("open_positions", [])),
+            }
+
+        # Current strategy params
+        package["current_strategy_params"] = self._load_all_params()
+        package["current_risk_params"] = self._load_risk_params()
+
+        return package
+
+    def _load_all_params(self) -> dict[str, Any]:
+        """Load all agent parameter files for the weekly package."""
+        config_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), "config")
+        params: dict[str, Any] = {}
+        for name in ("news_scout", "market_analyst", "devils_advocate"):
+            path = os.path.join(config_dir, f"{name}_params.json")
+            try:
+                with open(path) as f:
+                    params[name] = json.load(f)
+            except Exception:
+                params[name] = {}
+        return params
+
+    def _load_risk_params(self) -> dict[str, Any]:
+        """Load risk parameters for the weekly package."""
+        config_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), "config")
+        path = os.path.join(config_dir, "risk_params.json")
+        try:
+            with open(path) as f:
+                return json.load(f)
+        except Exception:
+            return {}
 
     def _generate_lessons(self, entry: dict[str, Any]) -> str:
         """Use DeepSeek to generate lessons from a closed trade."""
