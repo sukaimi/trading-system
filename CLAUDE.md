@@ -121,7 +121,7 @@ Optional: GOOGLE_API_KEY (fallback), ALPHA_VANTAGE_API_KEY, CRYPTOCOMPARE_API_KE
 - [ ] **Phase 5: Optimization** — Analyze paper trading data, tune parameters (needs 10-20+ trades)
 - [ ] **Phase 6: Micro Live** — $100 SGD on Alpaca live
 - [ ] **Phase 7: Scale** — Increase capital if profitable
-- [ ] Set up GitHub webhook for auto-deploy (add in repo settings → payload URL: http://VPS_IP:9000, secret: see webhook.service)
+- [x] Set up GitHub webhook for auto-deploy (payload URL: http://187.77.132.195:9000, secret: trading-system-deploy)
 
 ## Known Issues & Lessons Learned
 
