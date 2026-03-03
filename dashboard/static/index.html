@@ -171,10 +171,11 @@ body::after {
   font-family: inherit;
 }
 .collapse-btn:hover { color: var(--text); border-color: var(--text-dim); }
-.panel-agents      { grid-column: 1; grid-row: 5; }
-.panel-costs       { grid-column: 2; grid-row: 5; }
-.panel-journal     { grid-column: 1 / -1; grid-row: 6; }
-.panel-scheduler   { grid-column: 1 / -1; grid-row: 7; }
+.panel-positions   { grid-column: 1 / -1; grid-row: 5; }
+.panel-agents      { grid-column: 1; grid-row: 6; }
+.panel-costs       { grid-column: 2; grid-row: 6; }
+.panel-journal     { grid-column: 1 / -1; grid-row: 7; }
+.panel-scheduler   { grid-column: 1 / -1; grid-row: 8; }
 
 /* ── Lotus Creature Panel ────────────────────────────────────── */
 .panel-creature { padding: 12px; text-align: center; }
@@ -527,6 +528,38 @@ body::after {
   transition: width 0.3s ease;
 }
 
+/* ── Panel 5: Open Positions ─────────────────────────────────── */
+.positions-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+.positions-table th {
+  text-align: left;
+  padding: 6px 8px;
+  font-size: 10px;
+  text-transform: uppercase;
+  color: var(--text-dim);
+  border-bottom: 1px solid var(--border);
+  font-weight: 600;
+}
+.positions-table td {
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--border);
+}
+.positions-table tr:hover { background: var(--panel-alt); }
+.positions-summary {
+  display: flex;
+  gap: 24px;
+  margin-bottom: 8px;
+  font-size: 11px;
+  color: var(--text-dim);
+}
+.positions-summary .val { font-weight: 700; color: var(--text); }
+.pnl-pos { color: var(--green); }
+.pnl-neg { color: var(--red); }
+.sl-tp { font-size: 10px; color: var(--text-dim); }
+
 /* ── Panel 6: Trade Journal ───────────────────────────────────── */
 .journal-table {
   width: 100%;
@@ -791,6 +824,30 @@ body::after {
     <div class="cost-breakdown" id="cost-by-provider"></div>
     <div style="margin-top:10px; font-size:10px; color:var(--text-dim); text-transform:uppercase; letter-spacing:0.3px; margin-bottom:4px;">By Agent</div>
     <div class="cost-breakdown" id="cost-by-agent"></div>
+  </div>
+
+  <!-- Panel 5: Open Positions -->
+  <div class="panel panel-positions">
+    <div class="panel-title"><div class="dot" style="background:var(--blue)"></div> Open Positions</div>
+    <div class="positions-summary" id="positions-summary"></div>
+    <table class="positions-table">
+      <thead>
+        <tr>
+          <th>Asset</th>
+          <th>Direction</th>
+          <th>Size</th>
+          <th>Entry</th>
+          <th>Current</th>
+          <th>P&L</th>
+          <th>P&L %</th>
+          <th>Stop Loss</th>
+          <th>Take Profit</th>
+        </tr>
+      </thead>
+      <tbody id="positions-body">
+        <tr><td colspan="9" class="empty-state">No open positions</td></tr>
+      </tbody>
+    </table>
   </div>
 
   <!-- Panel 6: Trade Journal -->
@@ -1463,6 +1520,55 @@ function renderCosts() {
     `).join('') || '<div class="empty-state">No calls yet</div>';
 }
 
+/* ── Render: Open Positions ────────────────────────────────────── */
+
+function renderPositions() {
+  const body = document.getElementById('positions-body');
+  const summary = document.getElementById('positions-summary');
+  const positions = (state.portfolio && state.portfolio.open_positions) || [];
+
+  if (positions.length === 0) {
+    body.innerHTML = '<tr><td colspan="9" class="empty-state">No open positions</td></tr>';
+    summary.innerHTML = '';
+    return;
+  }
+
+  let totalPnl = 0;
+  let totalCost = 0;
+  positions.forEach(p => {
+    totalPnl += (p.unrealized_pnl || 0);
+    totalCost += (p.entry_price || 0) * (p.quantity || 0);
+  });
+  const totalPnlClass = totalPnl >= 0 ? 'pnl-pos' : 'pnl-neg';
+  const totalPnlStr = (totalPnl >= 0 ? '+' : '') + '$' + totalPnl.toFixed(4);
+
+  summary.innerHTML = `
+    <div>Positions: <span class="val">${positions.length}</span></div>
+    <div>Invested: <span class="val">$${totalCost.toFixed(2)}</span></div>
+    <div>Unrealized P&L: <span class="val ${totalPnlClass}">${totalPnlStr}</span></div>
+  `;
+
+  body.innerHTML = positions.map(p => {
+    const pnl = p.unrealized_pnl || 0;
+    const pnlPct = p.unrealized_pnl_pct || 0;
+    const pnlClass = pnl >= 0 ? 'pnl-pos' : 'pnl-neg';
+    const pnlStr = (pnl >= 0 ? '+' : '') + '$' + pnl.toFixed(4);
+    const pctStr = (pnlPct >= 0 ? '+' : '') + pnlPct.toFixed(2) + '%';
+    const cost = ((p.entry_price || 0) * (p.quantity || 0));
+    return `<tr>
+      <td style="color:var(--blue);font-weight:600">${esc(p.asset || '')}</td>
+      <td>${esc(p.direction || '')}</td>
+      <td>$${cost.toFixed(2)} <span class="sl-tp">(${(p.position_size_pct || 0).toFixed(1)}%)</span></td>
+      <td>$${fmtPrice(p.entry_price || 0)}</td>
+      <td>$${fmtPrice(p.current_price || p.entry_price || 0)}</td>
+      <td class="${pnlClass}" style="font-weight:600">${pnlStr}</td>
+      <td class="${pnlClass}">${pctStr}</td>
+      <td class="sl-tp">${p.stop_loss_price ? '$' + fmtPrice(p.stop_loss_price) : '--'}</td>
+      <td class="sl-tp">${p.take_profit_price ? '$' + fmtPrice(p.take_profit_price) : '--'}</td>
+    </tr>`;
+  }).join('');
+}
+
 /* ── Render: Journal ───────────────────────────────────────────── */
 
 function renderJournal() {
@@ -1560,6 +1666,7 @@ function renderAll() {
   renderMarket();
   renderHealth();
   renderCosts();
+  renderPositions();
   renderJournal();
   renderScheduler();
   renderEquityCurve();

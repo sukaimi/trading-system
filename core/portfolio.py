@@ -104,20 +104,29 @@ class PortfolioState:
         # Cash not tied up in positions
         cash = current_equity - cost_basis
 
-        # Current market value of positions
+        # Current market value of positions — also annotate each position
         market_value = 0.0
         for pos in positions:
             asset = pos.get("asset", "")
             quantity = pos.get("quantity", 0.0)
+            entry_price = pos.get("entry_price", 0.0)
             if not asset or quantity == 0:
                 continue
             price_data = market_data_fetcher.get_price(asset)
             price = price_data.get("price", 0.0)
             if price > 0:
                 market_value += price * quantity
+                pnl = (price - entry_price) * quantity
+                pnl_pct = ((price - entry_price) / entry_price * 100) if entry_price else 0
+                pos["current_price"] = price
+                pos["unrealized_pnl"] = round(pnl, 4)
+                pos["unrealized_pnl_pct"] = round(pnl_pct, 2)
             else:
                 # Fallback: use entry price if current price unavailable
-                market_value += pos.get("entry_price", 0.0) * quantity
+                market_value += entry_price * quantity
+                pos["current_price"] = entry_price
+                pos["unrealized_pnl"] = 0.0
+                pos["unrealized_pnl_pct"] = 0.0
 
         new_equity = cash + market_value
         log.info(
