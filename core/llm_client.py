@@ -281,6 +281,19 @@ class LLMClient:
                 log.warning("Could not parse JSON from LLM response")
                 return {"error": "Invalid JSON response", "raw": text[:500]}
 
+        # Ensure we have a dict or list — plain strings/numbers are not usable
+        if isinstance(parsed, str):
+            log.warning("LLM returned a plain string instead of JSON object — retrying extraction")
+            # Try to find a JSON object inside the string
+            match = re.search(r"\{.*\}", parsed, re.DOTALL)
+            if match:
+                try:
+                    parsed = json.loads(match.group())
+                except json.JSONDecodeError:
+                    return {"error": "LLM returned string, not JSON object", "raw": parsed[:500]}
+            else:
+                return {"error": "LLM returned string, not JSON object", "raw": parsed[:500]}
+
         # Validate against schema if provided
         if schema and isinstance(parsed, dict):
             try:
