@@ -216,6 +216,79 @@ class TestRunCircuitBreakerCheck:
         pipeline._circuit_breaker.check.assert_called_once()
 
 
+class TestCheckTakeProfits:
+    def test_skips_when_halted(self, pipeline):
+        pipeline._portfolio.halted = True
+        result = pipeline.check_take_profits()
+        assert result == []
+
+    def test_skips_positions_without_tp(self, pipeline):
+        pipeline._portfolio.add_position({
+            "trade_id": "t1", "asset": "BTC", "direction": "long",
+            "entry_price": 60000, "position_size_pct": 5.0, "quantity": 0.01,
+            "stop_loss_price": 57000,
+            # no take_profit_price
+        })
+        result = pipeline.check_take_profits()
+        assert result == []
+
+    @patch("core.pipeline.MarketDataFetcher")
+    def test_closes_when_tp_hit_long(self, mock_mdf_cls, pipeline):
+        mock_mdf = MagicMock()
+        mock_mdf.get_price.return_value = {"price": 65000}
+        mock_mdf_cls.return_value = mock_mdf
+
+        pipeline._portfolio.add_position({
+            "trade_id": "t1", "asset": "BTC", "direction": "long",
+            "entry_price": 60000, "position_size_pct": 5.0, "quantity": 0.01,
+            "stop_loss_price": 57000, "take_profit_price": 64500,
+        })
+        pipeline._executor = MagicMock()
+        pipeline._executor.execute.return_value = {
+            "type": "order_confirmation", "fill_price": 65000, "quantity": 0.01,
+        }
+
+        result = pipeline.check_take_profits()
+        assert len(result) == 1
+        assert result[0]["pnl"] > 0
+        pipeline._executor.execute.assert_called_once()
+
+    @patch("core.pipeline.MarketDataFetcher")
+    def test_no_close_when_below_tp_long(self, mock_mdf_cls, pipeline):
+        mock_mdf = MagicMock()
+        mock_mdf.get_price.return_value = {"price": 62000}
+        mock_mdf_cls.return_value = mock_mdf
+
+        pipeline._portfolio.add_position({
+            "trade_id": "t1", "asset": "BTC", "direction": "long",
+            "entry_price": 60000, "position_size_pct": 5.0, "quantity": 0.01,
+            "stop_loss_price": 57000, "take_profit_price": 64500,
+        })
+
+        result = pipeline.check_take_profits()
+        assert result == []
+
+    @patch("core.pipeline.MarketDataFetcher")
+    def test_closes_when_tp_hit_short(self, mock_mdf_cls, pipeline):
+        mock_mdf = MagicMock()
+        mock_mdf.get_price.return_value = {"price": 2700}
+        mock_mdf_cls.return_value = mock_mdf
+
+        pipeline._portfolio.add_position({
+            "trade_id": "t2", "asset": "ETH", "direction": "short",
+            "entry_price": 3200, "position_size_pct": 5.0, "quantity": 1.0,
+            "stop_loss_price": 3500, "take_profit_price": 2750,
+        })
+        pipeline._executor = MagicMock()
+        pipeline._executor.execute.return_value = {
+            "type": "order_confirmation", "fill_price": 2700, "quantity": 1.0,
+        }
+
+        result = pipeline.check_take_profits()
+        assert len(result) == 1
+        assert result[0]["pnl"] > 0
+
+
 class TestBuildExecutionOrder:
     def test_order_has_required_fields(self, pipeline):
         thesis = TradeThesis(
@@ -233,3 +306,36 @@ class TestBuildExecutionOrder:
         assert order["direction"] == "short"
         assert order["stop_loss"] == 3500.0
         assert order["quantity"] > 0
+
+    def test_take_profit_calculated_from_rr_long(self, pipeline):
+        thesis = TradeThesis(
+            asset="BTC", direction=Direction.LONG, confidence=0.8,
+            thesis="test", suggested_position_pct=5.0,
+            invalidation_level="57000", risk_reward_ratio="1.5",
+            supporting_data={"current_price": 60000},
+        )
+        verdict = DevilsVerdict(
+            original_thesis_id="x", verdict=Verdict.APPROVED,
+            confidence_adjusted=0.75,
+        )
+        order = pipeline._build_execution_order(thesis, verdict)
+        # stop = 57000, risk = 3000, reward = 3000 * 1.5 = 4500
+        # TP = 60000 + 4500 = 64500
+        assert order["take_profit"] == 64500.0
+        assert order["stop_loss"] == 57000.0
+
+    def test_take_profit_calculated_from_rr_short(self, pipeline):
+        thesis = TradeThesis(
+            asset="ETH", direction=Direction.SHORT, confidence=0.8,
+            thesis="test", suggested_position_pct=5.0,
+            invalidation_level="3500", risk_reward_ratio="2.0",
+            supporting_data={"current_price": 3200},
+        )
+        verdict = DevilsVerdict(
+            original_thesis_id="x", verdict=Verdict.APPROVED,
+            confidence_adjusted=0.75,
+        )
+        order = pipeline._build_execution_order(thesis, verdict)
+        # stop = 3500, risk = 300, reward = 300 * 2.0 = 600
+        # TP = 3200 - 600 = 2600
+        assert order["take_profit"] == 2600.0

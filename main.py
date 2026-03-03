@@ -123,8 +123,9 @@ def main():
         status = heartbeat.check()
         if not status.all_healthy:
             log.warning("Heartbeat reported failures: %s", status.failures)
-        # Run stop-loss check (Tier 0 — deterministic, every 5 min)
+        # Run stop-loss + take-profit checks (Tier 0 — deterministic, every 5 min)
         pipeline.check_stop_losses()
+        pipeline.check_take_profits()
         # Run circuit breaker check alongside heartbeat
         pipeline.run_circuit_breaker_check()
 
@@ -189,7 +190,7 @@ def main():
     signal.signal(signal.SIGTERM, _shutdown)
 
     # 11. Start dashboard server
-    dashboard_port = int(os.getenv("DASHBOARD_PORT", "8080"))
+    dashboard_port = int(os.getenv("DASHBOARD_PORT", "80"))
     start_dashboard(portfolio, heartbeat, cost_tracker, port=dashboard_port)
 
     # 12. Pre-flight API connectivity check

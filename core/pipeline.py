@@ -258,6 +258,7 @@ class TradingPipeline:
                 "position_size_pct": thesis.suggested_position_pct,
                 "quantity": confirmation.get("quantity", order_to_execute.get("quantity", 0)),
                 "stop_loss_price": order_to_execute.get("stop_loss"),
+                "take_profit_price": order_to_execute.get("take_profit"),
             })
             self._portfolio.persist()
         except Exception as e:
@@ -411,6 +412,135 @@ class TradingPipeline:
                 self._portfolio.persist()
             except Exception as e:
                 log.error("Portfolio persist after stop-loss closures failed: %s", e)
+
+        return closed
+
+    def check_take_profits(self) -> list[dict[str, Any]]:
+        """Check all open positions against their take-profit levels.
+
+        Called every 5 minutes from the heartbeat cycle.
+        Tier 0: pure Python, no LLM, deterministic.
+        """
+        if self._portfolio.halted:
+            log.info("System halted — skipping take-profit check")
+            return []
+
+        positions = self._portfolio.open_positions[:]
+        closed: list[dict[str, Any]] = []
+        market_data = MarketDataFetcher()
+
+        for pos in positions:
+            tp_price = pos.get("take_profit_price")
+            if tp_price is None:
+                continue
+
+            asset = pos.get("asset", "")
+            trade_id = pos.get("trade_id", "")
+            direction = pos.get("direction", "long")
+
+            # Fetch current price
+            try:
+                price_data = market_data.get_price(asset)
+                current_price = price_data.get("price", 0)
+            except Exception as e:
+                log.error("Take-profit check: price fetch failed for %s: %s", asset, e)
+                continue
+
+            if current_price <= 0:
+                log.warning("Take-profit check: no valid price for %s, skipping", asset)
+                continue
+
+            # Check breach (inverted from stop-loss)
+            breached = False
+            if direction == "long" and current_price >= tp_price:
+                breached = True
+            elif direction == "short" and current_price <= tp_price:
+                breached = True
+
+            if not breached:
+                continue
+
+            # --- TAKE-PROFIT HIT ---
+            log.info(
+                "TAKE-PROFIT HIT: %s %s (trade %s) — price $%.2f hit target $%.2f",
+                direction.upper(), asset, trade_id, current_price, tp_price,
+            )
+
+            quantity = pos.get("quantity", 0)
+            close_direction = "short" if direction == "long" else "long"
+            close_order = {
+                "type": "execution_order",
+                "thesis_id": f"tp_close_{trade_id}",
+                "asset": asset,
+                "direction": close_direction,
+                "quantity": quantity,
+                "order_type": "market",
+                "stop_loss": None,
+                "position_size_pct": pos.get("position_size_pct", 0),
+            }
+
+            try:
+                confirmation = self._executor.execute(close_order)
+            except Exception as e:
+                log.error("Take-profit close failed for %s: %s", trade_id, e)
+                continue
+
+            if confirmation.get("type") == "order_error":
+                log.error(
+                    "Take-profit close order error for %s: %s",
+                    trade_id, confirmation.get("error", ""),
+                )
+                continue
+
+            # Remove position and record P&L
+            self._portfolio.remove_position(trade_id)
+
+            entry_price = pos.get("entry_price", 0)
+            exit_price = confirmation.get("fill_price", current_price)
+            if direction == "long":
+                pnl = (exit_price - entry_price) * quantity
+            else:
+                pnl = (entry_price - exit_price) * quantity
+
+            self._portfolio.record_trade(pnl)
+
+            event_bus.emit("take_profit", "triggered", {
+                "trade_id": trade_id,
+                "asset": asset,
+                "direction": direction,
+                "entry_price": entry_price,
+                "target_price": tp_price,
+                "exit_price": exit_price,
+                "pnl": round(pnl, 2),
+            })
+
+            try:
+                self._telegram.send_alert(
+                    f"TAKE-PROFIT HIT: {direction.upper()} {asset}\n"
+                    f"Entry: ${entry_price:.2f} | Target: ${tp_price:.2f} | "
+                    f"Exit: ${exit_price:.2f}\n"
+                    f"P&L: ${pnl:.2f}"
+                )
+            except Exception as e:
+                log.error("Take-profit Telegram alert failed: %s", e)
+
+            closed.append({
+                "trade_id": trade_id,
+                "asset": asset,
+                "direction": direction,
+                "entry_price": entry_price,
+                "exit_price": exit_price,
+                "target_price": tp_price,
+                "pnl": round(pnl, 2),
+            })
+
+            log.info("Take-profit close complete: %s %s — P&L: $%.2f", asset, trade_id, pnl)
+
+        if closed:
+            try:
+                self._portfolio.persist()
+            except Exception as e:
+                log.error("Portfolio persist after take-profit closures failed: %s", e)
 
         return closed
 
@@ -572,6 +702,7 @@ class TradingPipeline:
                 "position_size_pct": thesis.suggested_position_pct,
                 "quantity": confirmation.get("quantity", order_to_execute.get("quantity", 0)),
                 "stop_loss_price": order_to_execute.get("stop_loss"),
+                "take_profit_price": order_to_execute.get("take_profit"),
             })
             self._portfolio.persist()
         except Exception as e:
@@ -722,6 +853,17 @@ class TradingPipeline:
             else:
                 stop_loss = round(current_price * 1.05, 2)
             log.info("Default stop-loss set at $%.2f (5%% from $%.2f)", stop_loss, current_price)
+        # Calculate take-profit from risk/reward ratio + stop-loss distance
+        take_profit = None
+        if stop_loss and current_price > 0:
+            risk_distance = abs(current_price - stop_loss)
+            reward_distance = risk_distance * rr
+            if thesis.direction.value == "long":
+                take_profit = round(current_price + reward_distance, 2)
+            else:
+                take_profit = round(current_price - reward_distance, 2)
+            log.info("Take-profit set at $%.2f (%.1f:1 R:R from $%.2f)", take_profit, rr, current_price)
+
         if current_price > 0 and equity > 0:
             position_value = equity * (position_pct / 100.0)
             quantity = position_value / current_price
@@ -736,6 +878,6 @@ class TradingPipeline:
             "quantity": quantity,
             "order_type": "market",
             "stop_loss": stop_loss,
-            "take_profit": None,
+            "take_profit": take_profit,
             "position_size_pct": position_pct,
         }
