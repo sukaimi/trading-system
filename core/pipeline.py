@@ -15,6 +15,7 @@ from agents.devils_advocate import DevilsAdvocate
 from agents.market_analyst import MarketAnalyst
 from agents.news_scout import NewsScout
 from agents.trade_journal import TradeJournal
+from core.event_bus import event_bus
 from core.executor import Executor
 from core.llm_client import LLMClient
 from core.logger import setup_logger
@@ -29,6 +30,7 @@ from core.schemas import (
     TradeThesis,
     Verdict,
 )
+from tools.market_data import MarketDataFetcher
 from tools.telegram_bot import TelegramNotifier
 
 log = setup_logger("trading.pipeline")
@@ -71,8 +73,13 @@ class TradingPipeline:
 
         try:
             log.info("Starting news scan...")
+            event_bus.emit("pipeline", "news_scan_start", {})
             signals = self._news_scout.scan()
             log.info("News scan produced %d signals", len(signals))
+            event_bus.emit("pipeline", "news_scan_complete", {
+                "signal_count": len(signals),
+                "signals": [{"headline": s.headline, "asset": s.asset.value, "strength": s.signal_strength} for s in signals],
+            })
 
             if signals:
                 self.process_signals(signals)
@@ -110,6 +117,7 @@ class TradingPipeline:
 
         if thesis is None:
             log.info("No trade thesis for %s — recording no-trade", signal.asset.value)
+            event_bus.emit("pipeline", "no_thesis", {"asset": signal.asset.value, "signal_headline": signal.headline})
             try:
                 self._journal.record_no_trade(signal, "No thesis generated")
             except Exception as e:
@@ -119,6 +127,10 @@ class TradingPipeline:
 
         result["thesis"] = thesis.thesis
         result["confidence"] = thesis.confidence
+        event_bus.emit("pipeline", "thesis_generated", {
+            "asset": thesis.asset.value, "direction": thesis.direction.value,
+            "confidence": thesis.confidence, "thesis": thesis.thesis[:200],
+        })
 
         # Step 2: Devil's Advocate challenges
         try:
@@ -131,9 +143,17 @@ class TradingPipeline:
             return result
 
         result["verdict"] = verdict.verdict.value
+        event_bus.emit("pipeline", "devil_verdict", {
+            "asset": signal.asset.value, "verdict": verdict.verdict.value,
+            "flags_raised": verdict.flags_raised, "reasoning": verdict.final_reasoning[:200],
+        })
 
         if verdict.verdict == Verdict.KILLED:
             log.info("Trade KILLED by Devil's Advocate: %s", verdict.final_reasoning)
+            event_bus.emit("pipeline", "trade_killed", {
+                "asset": signal.asset.value, "killed_by": "devils_advocate",
+                "reasoning": verdict.final_reasoning[:200],
+            })
             try:
                 self._journal.record_killed_trade(thesis, verdict)
             except Exception as e:
@@ -152,6 +172,10 @@ class TradingPipeline:
             result["outcome"] = "risk_error"
             result["error"] = str(e)
             return result
+
+        event_bus.emit("pipeline", "risk_check", {
+            "asset": signal.asset.value, "approved": approved, "reason": reason,
+        })
 
         if not approved:
             log.info("Trade rejected by Risk Manager: %s", reason)
@@ -203,6 +227,8 @@ class TradingPipeline:
                 "direction": thesis.direction.value,
                 "entry_price": confirmation.get("fill_price", 0.0),
                 "position_size_pct": thesis.suggested_position_pct,
+                "quantity": confirmation.get("quantity", order_to_execute.get("quantity", 0)),
+                "stop_loss_price": order_to_execute.get("stop_loss"),
             })
             self._portfolio.persist()
         except Exception as e:
@@ -219,12 +245,145 @@ class TradingPipeline:
 
         result["outcome"] = "executed"
         result["fill_price"] = confirmation.get("fill_price", 0.0)
+        event_bus.emit("pipeline", "trade_executed", {
+            "asset": thesis.asset.value, "direction": thesis.direction.value,
+            "fill_price": confirmation.get("fill_price", 0), "quantity": confirmation.get("quantity", 0),
+        })
         log.info(
             "Pipeline complete: %s %s — executed",
             thesis.direction.value,
             thesis.asset.value,
         )
         return result
+
+    def check_stop_losses(self) -> list[dict[str, Any]]:
+        """Check all open positions against their stop-loss levels.
+
+        Called every 5 minutes from the heartbeat cycle.
+        Tier 0: pure Python, no LLM, deterministic.
+        """
+        if self._portfolio.halted:
+            log.info("System halted — skipping stop-loss check")
+            return []
+
+        positions = self._portfolio.open_positions[:]
+        closed: list[dict[str, Any]] = []
+        market_data = MarketDataFetcher()
+
+        for pos in positions:
+            stop_price = pos.get("stop_loss_price")
+            if stop_price is None:
+                continue
+
+            asset = pos.get("asset", "")
+            trade_id = pos.get("trade_id", "")
+            direction = pos.get("direction", "long")
+
+            # Fetch current price
+            try:
+                price_data = market_data.get_price(asset)
+                current_price = price_data.get("price", 0)
+            except Exception as e:
+                log.error("Stop-loss check: price fetch failed for %s: %s", asset, e)
+                continue
+
+            if current_price <= 0:
+                log.warning("Stop-loss check: no valid price for %s, skipping", asset)
+                continue
+
+            # Check breach
+            breached = False
+            if direction == "long" and current_price <= stop_price:
+                breached = True
+            elif direction == "short" and current_price >= stop_price:
+                breached = True
+
+            if not breached:
+                continue
+
+            # --- STOP-LOSS BREACHED ---
+            log.warning(
+                "STOP-LOSS BREACHED: %s %s (trade %s) — price $%.2f hit stop $%.2f",
+                direction.upper(), asset, trade_id, current_price, stop_price,
+            )
+
+            quantity = pos.get("quantity", 0)
+            close_direction = "short" if direction == "long" else "long"
+            close_order = {
+                "type": "execution_order",
+                "thesis_id": f"sl_close_{trade_id}",
+                "asset": asset,
+                "direction": close_direction,
+                "quantity": quantity,
+                "order_type": "market",
+                "stop_loss": None,
+                "position_size_pct": pos.get("position_size_pct", 0),
+            }
+
+            try:
+                confirmation = self._executor.execute(close_order)
+            except Exception as e:
+                log.error("Stop-loss close failed for %s: %s", trade_id, e)
+                continue
+
+            if confirmation.get("type") == "order_error":
+                log.error(
+                    "Stop-loss close order error for %s: %s",
+                    trade_id, confirmation.get("error", ""),
+                )
+                continue
+
+            # Remove position and record P&L
+            self._portfolio.remove_position(trade_id)
+
+            entry_price = pos.get("entry_price", 0)
+            exit_price = confirmation.get("fill_price", current_price)
+            if direction == "long":
+                pnl = (exit_price - entry_price) * quantity
+            else:
+                pnl = (entry_price - exit_price) * quantity
+
+            self._portfolio.record_trade(pnl)
+
+            event_bus.emit("stop_loss", "triggered", {
+                "trade_id": trade_id,
+                "asset": asset,
+                "direction": direction,
+                "entry_price": entry_price,
+                "stop_price": stop_price,
+                "exit_price": exit_price,
+                "pnl": round(pnl, 2),
+            })
+
+            try:
+                self._telegram.send_alert(
+                    f"STOP-LOSS HIT: {direction.upper()} {asset}\n"
+                    f"Entry: ${entry_price:.2f} | Stop: ${stop_price:.2f} | "
+                    f"Exit: ${exit_price:.2f}\n"
+                    f"P&L: ${pnl:.2f}"
+                )
+            except Exception as e:
+                log.error("Stop-loss Telegram alert failed: %s", e)
+
+            closed.append({
+                "trade_id": trade_id,
+                "asset": asset,
+                "direction": direction,
+                "entry_price": entry_price,
+                "exit_price": exit_price,
+                "stop_price": stop_price,
+                "pnl": round(pnl, 2),
+            })
+
+            log.info("Stop-loss close complete: %s %s — P&L: $%.2f", asset, trade_id, pnl)
+
+        if closed:
+            try:
+                self._portfolio.persist()
+            except Exception as e:
+                log.error("Portfolio persist after stop-loss closures failed: %s", e)
+
+        return closed
 
     def run_circuit_breaker_check(self, market_data: dict[str, Any] | None = None) -> None:
         """Run circuit breaker check against current portfolio state."""
@@ -236,9 +395,14 @@ class TradingPipeline:
             result = self._circuit_breaker.check(portfolio_state, market_data)
             if result:
                 log.warning("Circuit breaker triggered: %s", result["triggers_fired"])
+                event_bus.emit("circuit_breaker", "triggered", {"triggers_fired": result["triggers_fired"]})
                 decision = self._circuit_breaker.escalate_to_opus(
                     result["triggers_fired"], portfolio_state, market_data
                 )
+                event_bus.emit("circuit_breaker", "decision", {
+                    "decision": getattr(decision, "decision", str(decision)),
+                    "reasoning": getattr(decision, "reasoning", ""),
+                })
                 self._circuit_breaker.execute_decision(decision)
         except Exception as e:
             log.error("Circuit breaker check failed: %s", e)
@@ -251,6 +415,7 @@ class TradingPipeline:
 
         try:
             log.info("Running scheduled analysis: %s", session)
+            event_bus.emit("pipeline", "scheduled_analysis_start", {"session": session})
             theses = self._analyst.scheduled_analysis(session)
             log.info("Scheduled analysis produced %d theses", len(theses))
 
@@ -258,6 +423,10 @@ class TradingPipeline:
             for thesis in theses:
                 result = self._process_thesis(thesis)
                 results.append(result)
+
+            event_bus.emit("pipeline", "scheduled_analysis_complete", {
+                "session": session, "thesis_count": len(theses),
+            })
             return results
         except Exception as e:
             log.error("Scheduled analysis failed: %s", e)
@@ -345,6 +514,8 @@ class TradingPipeline:
                 "direction": thesis.direction.value,
                 "entry_price": confirmation.get("fill_price", 0.0),
                 "position_size_pct": thesis.suggested_position_pct,
+                "quantity": confirmation.get("quantity", order_to_execute.get("quantity", 0)),
+                "stop_loss_price": order_to_execute.get("stop_loss"),
             })
             self._portfolio.persist()
         except Exception as e:
@@ -365,7 +536,7 @@ class TradingPipeline:
             ratio = verdict.confidence_adjusted / max(thesis.confidence, 0.01)
             position_pct = min(position_pct * ratio, 7.0)
 
-        # Calculate stop-loss from invalidation or ATR
+        # Calculate stop-loss from invalidation level, or default to 5% from price
         stop_loss = None
         if thesis.invalidation_level:
             try:
@@ -376,6 +547,23 @@ class TradingPipeline:
         # Calculate approximate quantity
         equity = self._portfolio.equity
         current_price = thesis.supporting_data.get("current_price", 0)
+
+        # Fetch live price if not in supporting_data
+        if not current_price:
+            try:
+                mdf = MarketDataFetcher()
+                price_data = mdf.get_price(thesis.asset.value)
+                current_price = price_data.get("price", 0)
+            except Exception:
+                pass
+
+        # Default stop-loss if none provided: 5% adverse move
+        if stop_loss is None and current_price > 0:
+            if thesis.direction.value == "long":
+                stop_loss = round(current_price * 0.95, 2)
+            else:
+                stop_loss = round(current_price * 1.05, 2)
+            log.info("Default stop-loss set at $%.2f (5%% from $%.2f)", stop_loss, current_price)
         if current_price > 0 and equity > 0:
             position_value = equity * (position_pct / 100.0)
             quantity = position_value / current_price

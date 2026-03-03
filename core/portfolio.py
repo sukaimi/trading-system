@@ -12,6 +12,7 @@ import threading
 from datetime import datetime
 from typing import Any
 
+from core.event_bus import event_bus
 from core.logger import setup_logger
 
 log = setup_logger("trading.portfolio")
@@ -94,12 +95,15 @@ class PortfolioState:
                 self.total_losses += 1
                 self.consecutive_losses += 1
             self.last_updated = datetime.utcnow().isoformat()
+        event_bus.emit("portfolio", "updated", self.snapshot())
 
     def add_position(self, position: dict[str, Any]) -> None:
         """Add an open position."""
         with self._lock:
             self.open_positions.append(position)
             self.last_updated = datetime.utcnow().isoformat()
+        event_bus.emit("portfolio", "position_added", position)
+        event_bus.emit("portfolio", "updated", self.snapshot())
 
     def remove_position(self, trade_id: str) -> dict[str, Any] | None:
         """Remove and return a position by trade_id."""
@@ -108,8 +112,12 @@ class PortfolioState:
                 if pos.get("trade_id") == trade_id:
                     removed = self.open_positions.pop(i)
                     self.last_updated = datetime.utcnow().isoformat()
-                    return removed
-            return None
+                    break
+            else:
+                return None
+        event_bus.emit("portfolio", "position_removed", {"trade_id": trade_id})
+        event_bus.emit("portfolio", "updated", self.snapshot())
+        return removed
 
     def reset_daily(self) -> None:
         """Reset daily P&L counters (called at start of each trading day)."""

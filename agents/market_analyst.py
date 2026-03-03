@@ -205,8 +205,10 @@ class MarketAnalyst:
     ) -> TradeThesis | None:
         """Build a TradeThesis from LLM result."""
         try:
-            # Parse confirming signals
+            # Parse confirming signals (LLM may return list instead of dict)
             cs_data = llm_result.get("confirming_signals", {})
+            if not isinstance(cs_data, dict):
+                cs_data = {}
             confirming = ConfirmingSignals(
                 fundamental=ConfirmingSignal(
                     present=cs_data.get("fundamental", {}).get("present", False),
@@ -239,12 +241,14 @@ class MarketAnalyst:
                 confirming_signals=confirming,
                 entry_trigger=llm_result.get("entry_trigger", ""),
                 invalidation_level=llm_result.get("invalidation_level", ""),
-                time_horizon=TimeHorizon(llm_result.get("time_horizon", "1-3 days")),
+                time_horizon=self._parse_time_horizon(llm_result.get("time_horizon", "1-3 days")),
                 suggested_position_pct=float(
                     llm_result.get("suggested_position_pct", default_size)
                 ),
                 risk_reward_ratio=str(llm_result.get("risk_reward_ratio", "")),
-                supporting_data=llm_result.get("supporting_data", tech_data),
+                supporting_data=llm_result.get("supporting_data", tech_data)
+                if isinstance(llm_result.get("supporting_data"), dict)
+                else tech_data,
                 what_could_go_wrong=llm_result.get("what_could_go_wrong", []),
                 triggering_alert_id=str(id(signal)),
             )
@@ -252,6 +256,20 @@ class MarketAnalyst:
         except (ValueError, KeyError) as e:
             log.warning("Failed to build thesis: %s", e)
             return None
+
+    @staticmethod
+    def _parse_time_horizon(value: str) -> TimeHorizon:
+        """Parse time horizon, falling back to SHORT for invalid values."""
+        try:
+            return TimeHorizon(value)
+        except ValueError:
+            # Map common LLM variations
+            v = value.lower().strip()
+            if "swing" in v:
+                return TimeHorizon.SWING
+            if "week" in v:
+                return TimeHorizon.MEDIUM
+            return TimeHorizon.SHORT
 
     def _load_params(self) -> dict[str, Any]:
         try:

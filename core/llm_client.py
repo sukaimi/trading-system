@@ -27,7 +27,7 @@ PROVIDERS = {
         "env_key": "DEEPSEEK_API_KEY",
     },
     "kimi": {
-        "base_url": "https://api.moonshot.cn/v1",
+        "base_url": "https://api.moonshot.ai/v1",
         "model": "moonshot-v1-auto",
         "env_key": "KIMI_API_KEY",
     },
@@ -50,6 +50,11 @@ class LLMClient:
     def __init__(self, mock_mode: bool | None = None):
         self._mock_mode = mock_mode
         self._timeout = 60
+        self._cost_tracker = None
+
+    def set_cost_tracker(self, tracker: Any) -> None:
+        """Attach a CostTracker to record per-call costs."""
+        self._cost_tracker = tracker
 
     @property
     def mock_mode(self) -> bool:
@@ -69,7 +74,10 @@ class LLMClient:
 
         try:
             raw = self._call_openai_compatible("deepseek", prompt, system_prompt)
-            return self._parse_json_response(raw, response_schema)
+            result = self._parse_json_response(raw, response_schema)
+            if self._cost_tracker and "error" not in result:
+                self._cost_tracker.record("deepseek", "pipeline", system_prompt + "\n" + prompt, raw)
+            return result
         except Exception as e:
             log.error("DeepSeek call failed: %s", e)
             return {"error": str(e)}
@@ -86,7 +94,10 @@ class LLMClient:
 
         try:
             raw = self._call_openai_compatible("kimi", prompt, system_prompt)
-            return self._parse_json_response(raw, response_schema)
+            result = self._parse_json_response(raw, response_schema)
+            if self._cost_tracker and "error" not in result:
+                self._cost_tracker.record("kimi", "pipeline", system_prompt + "\n" + prompt, raw)
+            return result
         except Exception as e:
             log.error("Kimi call failed: %s", e)
             return {"error": str(e)}
@@ -127,7 +138,10 @@ class LLMClient:
             data = resp.json()
             content = data.get("content", [{}])
             raw_text = content[0].get("text", "{}") if content else "{}"
-            return self._parse_json_response(raw_text, response_schema)
+            result = self._parse_json_response(raw_text, response_schema)
+            if self._cost_tracker and "error" not in result:
+                self._cost_tracker.record("anthropic", "pipeline", system_prompt + "\n" + prompt, raw_text)
+            return result
         except Exception as e:
             log.error("Anthropic call failed: %s", e)
             return {"error": str(e)}

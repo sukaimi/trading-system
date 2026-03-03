@@ -22,8 +22,9 @@ log = setup_logger("trading.heartbeat")
 class Heartbeat:
     """System health monitor — pure Python, no LLM."""
 
-    def __init__(self, telegram_notifier: Any = None):
+    def __init__(self, telegram_notifier: Any = None, skip_ibkr: bool = False):
         self.telegram = telegram_notifier
+        self.skip_ibkr = skip_ibkr
 
     def check(self) -> HeartbeatStatus:
         """Run all health checks and return status."""
@@ -36,10 +37,11 @@ class Heartbeat:
 
         # 2. API connectivity
         checks["deepseek"] = self._ping_api("https://api.deepseek.com/v1/models")
-        checks["kimi"] = self._ping_api("https://api.moonshot.cn/v1/models")
+        checks["kimi"] = self._ping_api("https://api.moonshot.ai/v1/models")
 
-        # 3. IBKR (best-effort — may not be running locally)
-        checks["ibkr"] = self._ping_ibkr()
+        # 3. IBKR (skip in paper mode)
+        if not self.skip_ibkr:
+            checks["ibkr"] = self._ping_ibkr()
 
         # 4. Security
         checks["api_keys_present"] = self._check_env_keys()

@@ -6,6 +6,7 @@ daily summary, weekly review, circuit breaker), and runs the event loop.
 Exits cleanly on SIGINT/SIGTERM.
 """
 
+import os
 import signal
 import sys
 import time
@@ -16,7 +17,11 @@ from dotenv import load_dotenv
 
 from agents.trade_journal import TradeJournal
 from agents.weekly_strategist import WeeklyStrategist
+from core.cost_tracker import CostTracker
+from core.event_bus import event_bus
+from core.alpaca_executor import AlpacaExecutor
 from core.executor import Executor
+from core.paper_executor import PaperExecutor
 from core.heartbeat import Heartbeat
 from core.llm_client import LLMClient
 from core.logger import setup_logger
@@ -24,6 +29,7 @@ from core.pipeline import TradingPipeline
 from core.portfolio import PortfolioState
 from core.risk_manager import RiskManager
 from core.self_optimizer import SelfOptimizer
+from dashboard.server import start_dashboard
 from tools.telegram_bot import TelegramNotifier
 
 log = setup_logger("trading.main")
@@ -55,13 +61,21 @@ def main():
     risk_manager = RiskManager()
     log.info("Risk manager initialized")
 
-    executor = Executor()
-    log.info("Executor initialized (paper_mode=%s)", executor.paper_mode)
+    executor_mode = os.getenv("EXECUTOR_MODE", "paper").lower()
+    if executor_mode == "alpaca":
+        executor = AlpacaExecutor()
+    elif executor_mode == "ibkr":
+        executor = Executor()
+    else:
+        executor = PaperExecutor()
+    log.info("Executor initialized (mode=%s, paper_mode=%s)", executor_mode, executor.paper_mode)
 
     telegram = TelegramNotifier()
 
     # 4. Initialize LLM client
     llm_client = LLMClient()
+    cost_tracker = CostTracker()
+    llm_client.set_cost_tracker(cost_tracker)
     log.info("LLM client initialized (mock_mode=%s)", llm_client.mock_mode)
 
     # 5. Initialize Tier 3 modules
@@ -86,15 +100,31 @@ def main():
     )
     log.info("Trading pipeline initialized")
 
-    # 7. Initialize heartbeat
-    heartbeat = Heartbeat(telegram_notifier=telegram)
+    # 7. Initialize heartbeat (skip IBKR check in paper mode)
+    heartbeat = Heartbeat(telegram_notifier=telegram, skip_ibkr=(executor_mode != "ibkr"))
     log.info("Heartbeat monitor initialized")
 
-    # 8. Define scheduled tasks
+    # 8. Task wrapper for dashboard event emission
+    def _emit_task(name, func):
+        def wrapper():
+            event_bus.emit("scheduler", "task_run", {"task_name": name})
+            t0 = time.time()
+            try:
+                func()
+            finally:
+                event_bus.emit("scheduler", "task_complete", {
+                    "task_name": name, "duration_sec": round(time.time() - t0, 2),
+                })
+        wrapper.__name__ = name
+        return wrapper
+
+    # 9. Define scheduled tasks
     def run_heartbeat():
         status = heartbeat.check()
         if not status.all_healthy:
             log.warning("Heartbeat reported failures: %s", status.failures)
+        # Run stop-loss check (Tier 0 — deterministic, every 5 min)
+        pipeline.check_stop_losses()
         # Run circuit breaker check alongside heartbeat
         pipeline.run_circuit_breaker_check()
 
@@ -143,29 +173,47 @@ def main():
             log.error("Weekly review failed: %s", e)
             telegram.send_alert(f"Weekly review error: {e}")
 
-    # 9. Register all schedules
-    schedule.every(5).minutes.do(run_heartbeat)
-    schedule.every(30).minutes.do(run_news_scan)
-    schedule.every().day.at("00:00").do(run_asian_open)         # 08:00 SGT
-    schedule.every().day.at("08:00").do(run_european_overlap)    # 16:00 SGT
-    schedule.every().day.at("14:00").do(run_us_close)            # 22:00 SGT
-    schedule.every().day.at("15:00").do(run_daily_summary)       # 23:00 SGT
-    schedule.every().day.at("16:00").do(run_daily_reset)         # 00:00 SGT (next day)
-    schedule.every().sunday.at("15:00").do(run_weekly_review)    # 23:00 SGT Sunday
+    # 10. Register all schedules (wrapped for dashboard events)
+    schedule.every(5).minutes.do(_emit_task("heartbeat", run_heartbeat))
+    schedule.every(30).minutes.do(_emit_task("news_scan", run_news_scan))
+    schedule.every().day.at("00:00").do(_emit_task("asian_open", run_asian_open))           # 08:00 SGT
+    schedule.every().day.at("08:00").do(_emit_task("european_overlap", run_european_overlap))  # 16:00 SGT
+    schedule.every().day.at("14:00").do(_emit_task("us_close", run_us_close))               # 22:00 SGT
+    schedule.every().day.at("15:00").do(_emit_task("daily_summary", run_daily_summary))     # 23:00 SGT
+    schedule.every().day.at("16:00").do(_emit_task("daily_reset", run_daily_reset))         # 00:00 SGT (next day)
+    schedule.every().sunday.at("15:00").do(_emit_task("weekly_review", run_weekly_review))  # 23:00 SGT Sunday
     log.info("All schedules registered (8 total)")
 
-    # 10. Register signal handlers for graceful shutdown
+    # Register signal handlers for graceful shutdown
     signal.signal(signal.SIGINT, _shutdown)
     signal.signal(signal.SIGTERM, _shutdown)
 
-    # 11. Run initial checks
+    # 11. Start dashboard server
+    dashboard_port = int(os.getenv("DASHBOARD_PORT", "8080"))
+    start_dashboard(portfolio, heartbeat, cost_tracker, port=dashboard_port)
+
+    # 12. Pre-flight API connectivity check
+    if not llm_client.mock_mode:
+        log.info("Pre-flight: testing LLM API keys...")
+        for name, test_fn in [
+            ("DeepSeek", lambda: llm_client.call_deepseek('Return {"ok":true}', "Respond with JSON.")),
+            ("Kimi", lambda: llm_client.call_kimi('Return {"ok":true}', "Respond with JSON.")),
+            ("Anthropic", lambda: llm_client.call_anthropic('Return {"ok":true}', "Respond with JSON.")),
+        ]:
+            result = test_fn()
+            if "error" in result:
+                log.warning("PRE-FLIGHT FAIL: %s — %s", name, result["error"])
+            else:
+                log.info("PRE-FLIGHT OK: %s", name)
+
+    # 13. Run initial checks
     log.info("Running initial heartbeat check...")
     run_heartbeat()
 
     log.info("Running initial news scan...")
     run_news_scan()
 
-    # 12. Event loop
+    # 14. Event loop
     log.info("Trading system started — entering main loop")
     try:
         while _running:
@@ -174,7 +222,7 @@ def main():
     except KeyboardInterrupt:
         pass
 
-    # 13. Cleanup
+    # 15. Cleanup
     log.info("Persisting portfolio state...")
     portfolio.persist()
     log.info("Trading system stopped")

@@ -1,0 +1,1032 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Trading System Dashboard</title>
+<style>
+/* ── Reset & Base ─────────────────────────────────────────────── */
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+:root {
+  --bg:        #0d1117;
+  --panel:     #161b22;
+  --panel-alt: #1c2128;
+  --border:    #30363d;
+  --text:      #c9d1d9;
+  --text-dim:  #8b949e;
+  --green:     #3fb950;
+  --red:       #f85149;
+  --yellow:    #d29922;
+  --blue:      #58a6ff;
+  --purple:    #bc8cff;
+  --orange:    #f0883e;
+  --cyan:      #39d2c0;
+}
+
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: 'SF Mono', 'JetBrains Mono', 'Fira Code', 'Cascadia Code', monospace;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+/* ── Header ───────────────────────────────────────────────────── */
+.header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 20px;
+  border-bottom: 1px solid var(--border);
+  background: var(--panel);
+}
+.header h1 { font-size: 16px; font-weight: 600; }
+.header h1 span { color: var(--blue); }
+.ws-status {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  color: var(--text-dim);
+}
+.ws-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--red);
+}
+.ws-dot.connected { background: var(--green); }
+
+/* ── Grid Layout ──────────────────────────────────────────────── */
+.dashboard {
+  display: grid;
+  grid-template-columns: 2fr 1fr;
+  grid-template-rows: auto auto auto auto auto auto;
+  gap: 12px;
+  padding: 16px;
+}
+
+.panel {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 16px;
+  overflow: hidden;
+}
+.panel-title {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--text-dim);
+  margin-bottom: 12px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.panel-title .dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+}
+
+/* Panel grid placement */
+.panel-portfolio   { grid-column: 1; grid-row: 1; }
+.panel-market      { grid-column: 2; grid-row: 1; }
+.panel-activity    { grid-column: 1 / -1; grid-row: 2; }
+.panel-activity.collapsed .activity-scroll { display: none; }
+.panel-activity.collapsed { max-height: none; }
+.collapse-btn {
+  margin-left: auto;
+  background: none;
+  border: 1px solid var(--border);
+  color: var(--text-dim);
+  font-size: 10px;
+  padding: 2px 8px;
+  border-radius: 4px;
+  cursor: pointer;
+  font-family: inherit;
+}
+.collapse-btn:hover { color: var(--text); border-color: var(--text-dim); }
+.panel-agents      { grid-column: 1; grid-row: 3; }
+.panel-costs       { grid-column: 2; grid-row: 3; }
+.panel-journal     { grid-column: 1 / -1; grid-row: 4; }
+.panel-scheduler   { grid-column: 1 / -1; grid-row: 5; }
+
+/* ── Lotus Creature Panel ────────────────────────────────────── */
+.panel-creature { padding: 12px; text-align: center; }
+.panel-creature canvas { border-radius: 6px; width: 100%; height: auto; }
+.creature-stats {
+  display: flex;
+  justify-content: space-around;
+  margin-top: 8px;
+  font-size: 10px;
+  color: var(--text-dim);
+}
+.creature-stats .stat-val { font-size: 13px; font-weight: 700; color: var(--text); }
+
+/* ── Panel 1: Portfolio ───────────────────────────────────────── */
+.metrics {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+  margin-bottom: 14px;
+}
+.metric-card {
+  background: var(--panel-alt);
+  border-radius: 6px;
+  padding: 10px 12px;
+}
+.metric-label {
+  font-size: 10px;
+  color: var(--text-dim);
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
+}
+.metric-value {
+  font-size: 20px;
+  font-weight: 700;
+  margin-top: 2px;
+}
+.metric-value.green { color: var(--green); }
+.metric-value.red { color: var(--red); }
+.metric-value.neutral { color: var(--text); }
+
+.positions-header {
+  font-size: 10px;
+  color: var(--text-dim);
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
+  margin-bottom: 6px;
+}
+.position-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 8px;
+  background: var(--panel-alt);
+  border-radius: 4px;
+  margin-bottom: 4px;
+  font-size: 12px;
+}
+.position-row .asset { font-weight: 600; color: var(--blue); min-width: 36px; }
+.position-row .dir { font-weight: 600; font-size: 10px; padding: 1px 6px; border-radius: 3px; }
+.position-row .dir.long { background: rgba(63,185,80,0.15); color: var(--green); }
+.position-row .dir.short { background: rgba(248,81,73,0.15); color: var(--red); }
+.empty-state { color: var(--text-dim); font-size: 12px; font-style: italic; }
+
+/* ── Panel 2: Market Overview ─────────────────────────────────── */
+.market-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+.market-card {
+  background: var(--panel-alt);
+  border-radius: 6px;
+  padding: 12px;
+  text-align: center;
+}
+.market-card .symbol { font-size: 11px; color: var(--text-dim); font-weight: 600; }
+.market-card .price { font-size: 18px; font-weight: 700; margin-top: 4px; }
+
+/* ── Panel 3: Activity Feed ───────────────────────────────────── */
+.activity-scroll {
+  max-height: 340px;
+  overflow-y: auto;
+  scrollbar-width: thin;
+  scrollbar-color: var(--border) transparent;
+}
+.activity-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--border);
+  font-size: 12px;
+  animation: fadeIn 0.3s ease;
+}
+@keyframes fadeIn { from { opacity: 0; transform: translateY(-4px); } to { opacity: 1; transform: none; } }
+
+.activity-item .time { color: var(--text-dim); min-width: 70px; font-size: 11px; flex-shrink: 0; }
+.badge {
+  font-size: 9px;
+  font-weight: 700;
+  text-transform: uppercase;
+  padding: 1px 5px;
+  border-radius: 3px;
+  flex-shrink: 0;
+}
+.badge-pipeline    { background: rgba(88,166,255,0.15); color: var(--blue); }
+.badge-portfolio   { background: rgba(57,210,192,0.15); color: var(--cyan); }
+.badge-heartbeat   { background: rgba(63,185,80,0.15);  color: var(--green); }
+.badge-circuit_breaker { background: rgba(240,136,62,0.15); color: var(--orange); }
+.badge-cost        { background: rgba(188,140,255,0.15); color: var(--purple); }
+.badge-scheduler   { background: rgba(210,153,34,0.15); color: var(--yellow); }
+.badge-stop_loss   { background: rgba(248,81,73,0.15); color: var(--red); }
+.activity-item .detail { color: var(--text); }
+
+/* ── Panel 4: Agent Health ────────────────────────────────────── */
+.agent-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+.agent-card {
+  background: var(--panel-alt);
+  border-radius: 6px;
+  padding: 10px;
+}
+.agent-card .name { font-size: 11px; font-weight: 600; margin-bottom: 4px; }
+.agent-card .tier { font-size: 10px; color: var(--text-dim); }
+.health-checks {
+  margin-top: 10px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+.health-chip {
+  font-size: 10px;
+  padding: 2px 6px;
+  border-radius: 3px;
+  display: flex;
+  align-items: center;
+  gap: 3px;
+}
+.health-chip.ok { background: rgba(63,185,80,0.12); color: var(--green); }
+.health-chip.fail { background: rgba(248,81,73,0.12); color: var(--red); }
+.halted-banner {
+  background: rgba(248,81,73,0.15);
+  border: 1px solid var(--red);
+  color: var(--red);
+  padding: 8px 12px;
+  border-radius: 6px;
+  font-weight: 600;
+  text-align: center;
+  margin-bottom: 10px;
+  display: none;
+}
+
+/* ── Panel 5: Cost Tracker ────────────────────────────────────── */
+.cost-total {
+  font-size: 28px;
+  font-weight: 700;
+  color: var(--purple);
+  margin-bottom: 12px;
+}
+.cost-total .label { font-size: 10px; color: var(--text-dim); display: block; font-weight: 400; }
+.cost-breakdown { margin-bottom: 8px; }
+.cost-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 4px 0;
+  font-size: 12px;
+}
+.cost-row .bar-track {
+  flex: 1;
+  height: 4px;
+  background: var(--border);
+  border-radius: 2px;
+  margin: 0 10px;
+}
+.cost-row .bar-fill {
+  height: 100%;
+  border-radius: 2px;
+  background: var(--purple);
+  transition: width 0.3s ease;
+}
+
+/* ── Panel 6: Trade Journal ───────────────────────────────────── */
+.journal-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+.journal-table th {
+  text-align: left;
+  padding: 6px 8px;
+  font-size: 10px;
+  text-transform: uppercase;
+  color: var(--text-dim);
+  border-bottom: 1px solid var(--border);
+  font-weight: 600;
+}
+.journal-table td {
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--border);
+}
+.journal-table tr:hover { background: var(--panel-alt); }
+.journal-scroll { max-height: 300px; overflow-y: auto; scrollbar-width: thin; scrollbar-color: var(--border) transparent; }
+.outcome-badge {
+  font-size: 10px;
+  font-weight: 600;
+  padding: 1px 6px;
+  border-radius: 3px;
+}
+.outcome-executed { background: rgba(63,185,80,0.15); color: var(--green); }
+.outcome-killed { background: rgba(248,81,73,0.15); color: var(--red); }
+.outcome-risk_rejected { background: rgba(210,153,34,0.15); color: var(--yellow); }
+.outcome-no_trade { background: rgba(139,148,158,0.15); color: var(--text-dim); }
+
+/* ── Panel 7: Scheduler ───────────────────────────────────────── */
+.scheduler-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.sched-card {
+  background: var(--panel-alt);
+  border-radius: 6px;
+  padding: 10px 14px;
+  min-width: 140px;
+  flex: 1;
+}
+.sched-card .name { font-size: 11px; font-weight: 600; margin-bottom: 2px; }
+.sched-card .interval { font-size: 10px; color: var(--text-dim); }
+.sched-card .countdown {
+  font-size: 16px;
+  font-weight: 700;
+  color: var(--yellow);
+  margin-top: 4px;
+}
+
+/* ── Scrollbar ────────────────────────────────────────────────── */
+::-webkit-scrollbar { width: 6px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+
+/* ── View Toggle ─────────────────────────────────────────────── */
+.view-creature { position: relative; height: 100vh; }
+.view-dashboard { display: none; }
+.view-dashboard.active { display: block; }
+.view-creature.hidden { display: none; }
+
+.creature-fullpage {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  overflow: hidden;
+}
+.creature-fullpage canvas {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+}
+.creature-fullpage-stats {
+  position: absolute;
+  bottom: 24px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  gap: 32px;
+  font-size: 12px;
+  color: var(--text-dim);
+  text-align: center;
+  z-index: 1;
+}
+.creature-fullpage-stats .stat-val {
+  font-size: 18px;
+  font-weight: 700;
+  color: var(--text);
+}
+.creature-header {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 20px;
+  background: transparent;
+}
+.creature-header h1 { font-size: 16px; font-weight: 600; }
+.creature-header h1 span { color: var(--cyan); }
+
+.view-btn {
+  background: none;
+  border: 1px solid var(--border);
+  color: var(--text-dim);
+  font-size: 11px;
+  padding: 4px 12px;
+  border-radius: 4px;
+  cursor: pointer;
+  font-family: inherit;
+  transition: all 0.2s;
+}
+.view-btn:hover { color: var(--text); border-color: var(--text-dim); background: var(--panel-alt); }
+</style>
+</head>
+<body>
+
+<!-- ═══ VIEW 1: Creature (default) ═══ -->
+<div class="view-creature" id="view-creature">
+  <div class="creature-header">
+    <h1><span>&#9670;</span> Lotus</h1>
+    <button class="view-btn" onclick="switchView('dashboard')">Dashboard</button>
+  </div>
+  <div class="creature-fullpage">
+    <canvas id="lotus-canvas-main" width="500" height="600"></canvas>
+    <div class="creature-fullpage-stats">
+      <div><div class="stat-val" id="lotus-fp-stage">Dormant</div>Stage</div>
+      <div><div class="stat-val" id="lotus-fp-level">1</div>Level</div>
+      <div><div class="stat-val" id="lotus-fp-mood">idle</div>Mood</div>
+      <div><div class="stat-val" id="lotus-fp-hp">100</div>HP</div>
+      <div><div class="stat-val" id="lotus-fp-xp">0</div>XP</div>
+    </div>
+  </div>
+</div>
+
+<!-- ═══ VIEW 2: Dashboard ═══ -->
+<div class="view-dashboard" id="view-dashboard">
+
+<!-- Header -->
+<div class="header">
+  <h1><span>&#9670;</span> Trading System <span>Dashboard</span></h1>
+  <div class="ws-status">
+    <button class="view-btn" onclick="switchView('creature')" style="margin-right:10px">Lotus</button>
+    <div class="ws-dot" id="ws-dot"></div>
+    <span id="ws-label">Disconnected</span>
+  </div>
+</div>
+
+<!-- Dashboard Grid -->
+<div class="dashboard">
+
+  <!-- Panel 1: Portfolio Overview -->
+  <div class="panel panel-portfolio">
+    <div class="panel-title"><div class="dot" style="background:var(--cyan)"></div> Portfolio</div>
+    <div class="metrics">
+      <div class="metric-card">
+        <div class="metric-label">Equity</div>
+        <div class="metric-value neutral" id="equity">$0.00</div>
+      </div>
+      <div class="metric-card">
+        <div class="metric-label">Daily P&L</div>
+        <div class="metric-value neutral" id="daily-pnl">0.00%</div>
+      </div>
+      <div class="metric-card">
+        <div class="metric-label">Drawdown</div>
+        <div class="metric-value neutral" id="drawdown">0.00%</div>
+      </div>
+      <div class="metric-card">
+        <div class="metric-label">Win / Loss</div>
+        <div class="metric-value neutral" id="win-loss">0W / 0L</div>
+      </div>
+    </div>
+    <div class="positions-header">Open Positions</div>
+    <div id="positions-list"><div class="empty-state">No open positions</div></div>
+  </div>
+
+  <!-- Panel 2: Market Overview -->
+  <div class="panel panel-market">
+    <div class="panel-title"><div class="dot" style="background:var(--green)"></div> Market</div>
+    <div class="market-grid" id="market-grid">
+      <div class="market-card"><div class="symbol">BTC</div><div class="price" id="price-BTC">--</div></div>
+      <div class="market-card"><div class="symbol">ETH</div><div class="price" id="price-ETH">--</div></div>
+      <div class="market-card"><div class="symbol">GLDM</div><div class="price" id="price-GLDM">--</div></div>
+      <div class="market-card"><div class="symbol">SLV</div><div class="price" id="price-SLV">--</div></div>
+    </div>
+  </div>
+
+  <!-- Panel 3: Live Activity Feed -->
+  <div class="panel panel-activity" id="panel-activity">
+    <div class="panel-title">
+      <div class="dot" style="background:var(--blue)"></div> Live Activity
+      <button class="collapse-btn" id="activity-toggle" onclick="toggleActivity()">Collapse</button>
+    </div>
+    <div class="activity-scroll" id="activity-feed"></div>
+  </div>
+
+  <!-- Panel 4: Agent Status & Health -->
+  <div class="panel panel-agents">
+    <div class="panel-title"><div class="dot" style="background:var(--green)"></div> Agents & Health</div>
+    <div class="halted-banner" id="halted-banner">SYSTEM HALTED &mdash; Circuit Breaker Active</div>
+    <div class="agent-grid" id="agent-grid">
+      <div class="agent-card"><div class="name">NewsScout</div><div class="tier">Tier 1 &middot; DeepSeek</div></div>
+      <div class="agent-card"><div class="name">MarketAnalyst</div><div class="tier">Tier 1-2 &middot; DeepSeek/Kimi</div></div>
+      <div class="agent-card"><div class="name">DevilsAdvocate</div><div class="tier">Tier 2 &middot; Kimi</div></div>
+      <div class="agent-card"><div class="name">Executor</div><div class="tier">Tier 0 &middot; Pure Python</div></div>
+      <div class="agent-card"><div class="name">WeeklyStrategist</div><div class="tier">Tier 3 &middot; Claude Opus</div></div>
+      <div class="agent-card"><div class="name">CircuitBreaker</div><div class="tier">Tier 3 &middot; Claude Opus</div></div>
+    </div>
+    <div style="margin-top:12px;">
+      <div class="panel-title" style="margin-bottom:6px"><div class="dot" style="background:var(--green)"></div> Health Checks</div>
+      <div class="health-checks" id="health-checks">
+        <span class="health-chip ok">Loading...</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- Panel 5: Cost Tracker -->
+  <div class="panel panel-costs">
+    <div class="panel-title"><div class="dot" style="background:var(--purple)"></div> LLM Costs</div>
+    <div class="cost-total"><span class="label">Total Spend</span>$<span id="cost-total">0.0000</span></div>
+    <div class="cost-breakdown" id="cost-by-provider"></div>
+    <div style="margin-top:10px; font-size:10px; color:var(--text-dim); text-transform:uppercase; letter-spacing:0.3px; margin-bottom:4px;">By Agent</div>
+    <div class="cost-breakdown" id="cost-by-agent"></div>
+  </div>
+
+  <!-- Panel 6: Trade Journal -->
+  <div class="panel panel-journal">
+    <div class="panel-title"><div class="dot" style="background:var(--yellow)"></div> Trade Journal</div>
+    <div class="journal-scroll">
+      <table class="journal-table">
+        <thead>
+          <tr>
+            <th>Time</th>
+            <th>Asset</th>
+            <th>Direction</th>
+            <th>Thesis</th>
+            <th>Verdict</th>
+            <th>Outcome</th>
+            <th>Entry</th>
+          </tr>
+        </thead>
+        <tbody id="journal-body">
+          <tr><td colspan="7" class="empty-state">No trades recorded yet</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- Panel 7: Scheduler Timeline -->
+  <div class="panel panel-scheduler">
+    <div class="panel-title"><div class="dot" style="background:var(--yellow)"></div> Scheduler</div>
+    <div class="scheduler-grid" id="scheduler-grid"></div>
+  </div>
+
+</div>
+
+</div><!-- /view-dashboard -->
+
+<script src="/static/lotus-creature.js"></script>
+<script>
+/* ================================================================
+   Trading System Dashboard — Vanilla JS
+   ================================================================ */
+
+const state = {
+  portfolio: {},
+  journal: [],
+  heartbeat: {},
+  costs: { total_usd: 0, by_provider: {}, by_agent: {}, call_count: 0 },
+  scheduler: [],
+  market: {},
+  wsConnected: false,
+};
+
+/* ── Initial data load ─────────────────────────────────────────── */
+
+async function loadInitialData() {
+  const endpoints = [
+    ['/api/portfolio', 'portfolio'],
+    ['/api/journal', 'journal'],
+    ['/api/heartbeat', 'heartbeat'],
+    ['/api/costs', 'costs'],
+    ['/api/scheduler', 'scheduler'],
+    ['/api/market', 'market'],
+  ];
+  await Promise.all(endpoints.map(async ([url, key]) => {
+    try {
+      const resp = await fetch(url);
+      if (resp.ok) state[key] = await resp.json();
+    } catch (e) { console.warn('Failed to load', key, e); }
+  }));
+
+  // Load recent events into feed
+  try {
+    const resp = await fetch('/api/events/recent');
+    if (resp.ok) {
+      const events = await resp.json();
+      events.forEach(ev => addActivityItem(ev));
+    }
+  } catch (e) { /* ignore */ }
+
+  renderAll();
+}
+
+/* ── WebSocket ─────────────────────────────────────────────────── */
+
+function connectWS() {
+  const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+  const ws = new WebSocket(`${proto}//${location.host}/ws`);
+
+  ws.onopen = () => {
+    state.wsConnected = true;
+    document.getElementById('ws-dot').classList.add('connected');
+    document.getElementById('ws-label').textContent = 'Connected';
+  };
+
+  ws.onclose = () => {
+    state.wsConnected = false;
+    document.getElementById('ws-dot').classList.remove('connected');
+    document.getElementById('ws-label').textContent = 'Reconnecting...';
+    setTimeout(connectWS, 3000);
+  };
+
+  ws.onmessage = (msg) => {
+    const event = JSON.parse(msg.data);
+    handleEvent(event);
+    if (window.lotus) window.lotus.dispatch(event);
+  };
+}
+
+/* ── Event Router ──────────────────────────────────────────────── */
+
+function handleEvent(event) {
+  addActivityItem(event);
+
+  switch (event.category) {
+    case 'portfolio':
+      if (event.event_type === 'updated' && event.data) {
+        state.portfolio = event.data;
+        renderPortfolio();
+      }
+      break;
+    case 'heartbeat':
+      if (event.data) { state.heartbeat = event.data; renderHealth(); }
+      break;
+    case 'cost':
+      if (event.data) { updateCostState(event.data); renderCosts(); }
+      break;
+    case 'scheduler':
+      // Refresh scheduler data
+      fetch('/api/scheduler').then(r => r.ok ? r.json() : []).then(d => { state.scheduler = d; renderScheduler(); });
+      break;
+    case 'circuit_breaker':
+      renderCircuitBreaker(event);
+      break;
+  }
+}
+
+/* ── Render: Portfolio ─────────────────────────────────────────── */
+
+function renderPortfolio() {
+  const p = state.portfolio;
+  document.getElementById('equity').textContent = '$' + fmt(p.equity || 0, 2);
+
+  const pnlEl = document.getElementById('daily-pnl');
+  const pnl = p.daily_pnl_pct || 0;
+  pnlEl.textContent = (pnl >= 0 ? '+' : '') + fmt(pnl, 2) + '%';
+  pnlEl.className = 'metric-value ' + (pnl > 0 ? 'green' : pnl < 0 ? 'red' : 'neutral');
+
+  const ddEl = document.getElementById('drawdown');
+  const dd = p.drawdown_from_peak_pct || 0;
+  ddEl.textContent = fmt(dd, 2) + '%';
+  ddEl.className = 'metric-value ' + (dd > 3 ? 'red' : dd > 0 ? 'yellow' : 'neutral');
+
+  document.getElementById('win-loss').textContent =
+    `${p.total_wins || 0}W / ${p.total_losses || 0}L (${p.total_trades || 0})`;
+
+  // Positions
+  const el = document.getElementById('positions-list');
+  const positions = p.open_positions || [];
+  if (positions.length === 0) {
+    el.innerHTML = '<div class="empty-state">No open positions</div>';
+  } else {
+    el.innerHTML = positions.map(pos => `
+      <div class="position-row">
+        <span class="asset">${esc(pos.asset)}</span>
+        <span class="dir ${pos.direction}">${(pos.direction || '').toUpperCase()}</span>
+        <span>@ $${fmt(pos.entry_price || 0, 2)}</span>
+        <span style="color:var(--text-dim)">${fmt(pos.position_size_pct || 0, 1)}%</span>
+      </div>
+    `).join('');
+  }
+
+  // Halted banner
+  document.getElementById('halted-banner').style.display = p.halted ? 'block' : 'none';
+}
+
+/* ── Render: Market ────────────────────────────────────────────── */
+
+function renderMarket() {
+  for (const [symbol, data] of Object.entries(state.market)) {
+    const el = document.getElementById('price-' + symbol);
+    if (!el) continue;
+    if (data && typeof data === 'object' && data.price != null) {
+      el.textContent = '$' + fmtPrice(data.price);
+    } else if (typeof data === 'number') {
+      el.textContent = '$' + fmtPrice(data);
+    } else {
+      el.textContent = '--';
+    }
+  }
+}
+
+/* ── Render: Activity Feed ─────────────────────────────────────── */
+
+function addActivityItem(event) {
+  const feed = document.getElementById('activity-feed');
+  const div = document.createElement('div');
+  div.className = 'activity-item';
+  div.innerHTML = `
+    <span class="time">${fmtTime(event.timestamp)}</span>
+    <span class="badge badge-${esc(event.category)}">${esc(event.category)}</span>
+    <span class="detail">${formatEventDetail(event)}</span>
+  `;
+  feed.insertBefore(div, feed.firstChild);
+  while (feed.children.length > 200) feed.removeChild(feed.lastChild);
+}
+
+function formatEventDetail(ev) {
+  const d = ev.data || {};
+  switch (ev.event_type) {
+    case 'news_scan_start': return 'News scan started';
+    case 'news_scan_complete': return `News scan complete &mdash; ${d.signal_count || 0} signals`;
+    case 'thesis_generated': return `Thesis: <b>${esc(d.direction||'')}</b> ${esc(d.asset||'')} (conf: ${fmt(d.confidence||0,2)}) &mdash; ${esc((d.thesis||'').slice(0,80))}`;
+    case 'no_thesis': return `No thesis for ${esc(d.asset||'')}`;
+    case 'devil_verdict': return `Devil: <b style="color:${d.verdict==='KILLED'?'var(--red)':d.verdict==='APPROVED'?'var(--green)':'var(--yellow)'}">${esc(d.verdict||'')}</b> ${esc(d.asset||'')} (${d.flags_raised||0} flags)`;
+    case 'trade_killed': return `<span style="color:var(--red)">KILLED</span> ${esc(d.asset||'')} by ${esc(d.killed_by||'unknown')}`;
+    case 'risk_check': return `Risk: ${d.approved ? '<span style="color:var(--green)">APPROVED</span>' : '<span style="color:var(--red)">REJECTED</span>'} ${esc(d.asset||'')} &mdash; ${esc(d.reason||'')}`;
+    case 'trade_executed': return `<span style="color:var(--green)">EXECUTED</span> ${esc(d.direction||'')} ${esc(d.asset||'')} @ $${fmtPrice(d.fill_price||0)}`;
+    case 'scheduled_analysis_start': return `Scheduled analysis: ${esc(d.session||'')}`;
+    case 'scheduled_analysis_complete': return `Analysis complete: ${d.thesis_count||0} theses`;
+    case 'check_complete': return d.all_healthy ? '<span style="color:var(--green)">All systems healthy</span>' : `<span style="color:var(--red)">Failures: ${esc((d.failures||[]).join(', '))}</span>`;
+    case 'decision': return `<span style="color:var(--orange)">CB decision: ${esc(d.decision||'')}</span>`;
+    case 'llm_call': return `LLM: ${esc(d.provider||'')} ($${fmt(d.cost_usd||0,4)})`;
+    case 'task_run': return `Task started: ${esc(d.task_name||'')}`;
+    case 'task_complete': return `Task done: ${esc(d.task_name||'')} (${fmt(d.duration_sec||0,1)}s)`;
+    case 'triggered':
+      if (ev.category === 'stop_loss') return `<span style="color:var(--red)">STOP-LOSS HIT</span> ${esc(d.direction||'')} ${esc(d.asset||'')} — exit $${fmtPrice(d.exit_price||0)} (P&L: $${fmt(d.pnl||0,2)})`;
+      return `<span style="color:var(--orange)">Circuit breaker triggers: ${esc((d.triggers_fired||[]).join(', '))}</span>`;
+    default: return `${esc(ev.event_type||'')}`;
+  }
+}
+
+/* ── Render: Health ────────────────────────────────────────────── */
+
+function renderHealth() {
+  const h = state.heartbeat;
+  const checks = h.checks || {};
+  const el = document.getElementById('health-checks');
+
+  if (Object.keys(checks).length === 0) {
+    el.innerHTML = '<span class="health-chip ok">Waiting for heartbeat...</span>';
+    return;
+  }
+
+  el.innerHTML = Object.entries(checks).map(([key, ok]) =>
+    `<span class="health-chip ${ok ? 'ok' : 'fail'}">${ok ? '&#10003;' : '&#10007;'} ${esc(key)}</span>`
+  ).join('');
+}
+
+/* ── Render: Costs ─────────────────────────────────────────────── */
+
+function updateCostState(record) {
+  state.costs.total_usd = (state.costs.total_usd || 0) + (record.cost_usd || 0);
+  const provider = record.provider || 'unknown';
+  const agent = record.agent || 'unknown';
+  state.costs.by_provider = state.costs.by_provider || {};
+  state.costs.by_agent = state.costs.by_agent || {};
+  state.costs.by_provider[provider] = (state.costs.by_provider[provider] || 0) + (record.cost_usd || 0);
+  state.costs.by_agent[agent] = (state.costs.by_agent[agent] || 0) + (record.cost_usd || 0);
+  state.costs.call_count = (state.costs.call_count || 0) + 1;
+}
+
+function renderCosts() {
+  const c = state.costs;
+  document.getElementById('cost-total').textContent = fmt(c.total_usd || 0, 4);
+
+  const maxProvider = Math.max(...Object.values(c.by_provider || {}), 0.0001);
+  document.getElementById('cost-by-provider').innerHTML =
+    Object.entries(c.by_provider || {}).map(([k, v]) => `
+      <div class="cost-row">
+        <span>${esc(k)}</span>
+        <div class="bar-track"><div class="bar-fill" style="width:${(v/maxProvider*100).toFixed(0)}%"></div></div>
+        <span>$${fmt(v, 4)}</span>
+      </div>
+    `).join('') || '<div class="empty-state">No calls yet</div>';
+
+  const maxAgent = Math.max(...Object.values(c.by_agent || {}), 0.0001);
+  document.getElementById('cost-by-agent').innerHTML =
+    Object.entries(c.by_agent || {}).map(([k, v]) => `
+      <div class="cost-row">
+        <span>${esc(k)}</span>
+        <div class="bar-track"><div class="bar-fill" style="width:${(v/maxAgent*100).toFixed(0)}%"></div></div>
+        <span>$${fmt(v, 4)}</span>
+      </div>
+    `).join('') || '<div class="empty-state">No calls yet</div>';
+}
+
+/* ── Render: Journal ───────────────────────────────────────────── */
+
+function renderJournal() {
+  const body = document.getElementById('journal-body');
+  const entries = state.journal || [];
+
+  if (!Array.isArray(entries) || entries.length === 0) {
+    body.innerHTML = '<tr><td colspan="7" class="empty-state">No trades recorded yet</td></tr>';
+    return;
+  }
+
+  body.innerHTML = entries.slice(-50).reverse().map(e => {
+    const outcome = e.outcome || e.type || 'unknown';
+    const outcomeClass = outcome.includes('execute') ? 'executed'
+      : outcome.includes('kill') ? 'killed'
+      : outcome.includes('reject') ? 'risk_rejected'
+      : 'no_trade';
+    return `<tr>
+      <td>${fmtTime(e.timestamp_open || e.timestamp || '')}</td>
+      <td style="color:var(--blue);font-weight:600">${esc(e.asset || '')}</td>
+      <td>${esc(e.direction || '')}</td>
+      <td style="max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${esc(e.thesis_summary || e.thesis || '')}">${esc((e.thesis_summary || e.thesis || '').slice(0, 60))}</td>
+      <td>${esc(e.verdict || '')}</td>
+      <td><span class="outcome-badge outcome-${outcomeClass}">${esc(outcome)}</span></td>
+      <td>${e.entry_price ? '$' + fmtPrice(e.entry_price) : '--'}</td>
+    </tr>`;
+  }).join('');
+}
+
+/* ── Render: Scheduler ─────────────────────────────────────────── */
+
+function renderScheduler() {
+  const grid = document.getElementById('scheduler-grid');
+  const tasks = state.scheduler || [];
+
+  if (tasks.length === 0) {
+    grid.innerHTML = '<div class="empty-state">No scheduled tasks</div>';
+    return;
+  }
+
+  grid.innerHTML = tasks.map((t, i) => `
+    <div class="sched-card">
+      <div class="name">${esc(formatTaskName(t.name))}</div>
+      <div class="interval">${esc(t.interval)} ${esc(t.unit)}${t.at_time ? ' @ ' + esc(t.at_time) : ''}</div>
+      <div class="countdown" id="countdown-${i}">--</div>
+    </div>
+  `).join('');
+}
+
+function updateCountdowns() {
+  const tasks = state.scheduler || [];
+  const now = Date.now();
+  tasks.forEach((t, i) => {
+    const el = document.getElementById('countdown-' + i);
+    if (!el || !t.next_run) return;
+    const diff = Math.max(0, Math.floor((new Date(t.next_run).getTime() - now) / 1000));
+    if (diff > 3600) {
+      const h = Math.floor(diff / 3600);
+      const m = Math.floor((diff % 3600) / 60);
+      el.textContent = h + 'h ' + m + 'm';
+    } else {
+      const m = Math.floor(diff / 60);
+      const s = diff % 60;
+      el.textContent = m + 'm ' + s + 's';
+    }
+  });
+}
+
+function renderCircuitBreaker(event) {
+  if (event.event_type === 'triggered' || event.event_type === 'decision') {
+    document.getElementById('halted-banner').style.display = 'block';
+  }
+}
+
+/* ── Render All ────────────────────────────────────────────────── */
+
+function renderAll() {
+  renderPortfolio();
+  renderMarket();
+  renderHealth();
+  renderCosts();
+  renderJournal();
+  renderScheduler();
+}
+
+/* ── Helpers ───────────────────────────────────────────────────── */
+
+function fmt(n, decimals) { return Number(n || 0).toFixed(decimals); }
+function fmtPrice(n) {
+  n = Number(n || 0);
+  if (n >= 1000) return n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  if (n >= 1) return n.toFixed(2);
+  return n.toFixed(4);
+}
+function fmtTime(iso) {
+  if (!iso) return '--';
+  try {
+    const d = new Date(iso);
+    return d.toLocaleTimeString('en-US', { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' });
+  } catch { return '--'; }
+}
+function esc(s) {
+  if (!s) return '';
+  const d = document.createElement('div');
+  d.textContent = String(s);
+  return d.innerHTML;
+}
+function formatTaskName(name) {
+  return (name || '').replace(/_/g, ' ').replace(/^run /, '');
+}
+
+/* ── Activity Collapse Toggle ──────────────────────────────────── */
+
+function toggleActivity() {
+  const panel = document.getElementById('panel-activity');
+  const btn = document.getElementById('activity-toggle');
+  panel.classList.toggle('collapsed');
+  btn.textContent = panel.classList.contains('collapsed') ? 'Expand' : 'Collapse';
+}
+
+/* ── Startup ───────────────────────────────────────────────────── */
+
+loadInitialData();
+connectWS();
+setInterval(updateCountdowns, 1000);
+setInterval(async () => {
+  try {
+    const resp = await fetch('/api/market');
+    if (resp.ok) { state.market = await resp.json(); renderMarket(); }
+  } catch (e) { /* ignore */ }
+}, 60000);
+// Refresh scheduler every 30s to keep countdowns accurate
+setInterval(async () => {
+  try {
+    const resp = await fetch('/api/scheduler');
+    if (resp.ok) { state.scheduler = await resp.json(); renderScheduler(); }
+  } catch (e) { /* ignore */ }
+}, 30000);
+
+// ── View Switcher ─────────────────────────────────────────────
+function switchView(target) {
+  const creatureView = document.getElementById('view-creature');
+  const dashboardView = document.getElementById('view-dashboard');
+  if (target === 'dashboard') {
+    creatureView.classList.add('hidden');
+    dashboardView.classList.add('active');
+  } else {
+    dashboardView.classList.remove('active');
+    creatureView.classList.remove('hidden');
+  }
+}
+
+// ── Lotus Creature (full-page canvas) ─────────────────────────
+function resizeLotusCanvas() {
+  const c = document.getElementById('lotus-canvas-main');
+  const parent = c.parentElement;
+  const dpr = window.devicePixelRatio || 1;
+  c.width = parent.clientWidth * dpr;
+  c.height = parent.clientHeight * dpr;
+  c.getContext('2d').scale(dpr, dpr);
+  if (window.lotus) {
+    window.lotus.opts.width = parent.clientWidth;
+    window.lotus.opts.height = parent.clientHeight;
+    window.lotus._particles = window.lotus._makeParticles();
+    window.lotus._stars = window.lotus._makeStars();
+  }
+}
+resizeLotusCanvas();
+window.addEventListener('resize', resizeLotusCanvas);
+
+const lotus = new LotusCreature('lotus-canvas-main', {
+  wsUrl: null,
+  width: document.getElementById('lotus-canvas-main').parentElement.clientWidth,
+  height: document.getElementById('lotus-canvas-main').parentElement.clientHeight,
+});
+window.lotus = lotus;
+lotus.init();
+
+// Update creature stats — both fullpage and dashboard mini panel
+setInterval(() => {
+  if (!window.lotus) return;
+  const s = lotus.getState();
+  const g = s.palette && s.palette.glow;
+  const glow = g ? `rgb(${g[0]},${g[1]},${g[2]})` : 'var(--cyan)';
+
+  // Fullpage stats
+  const fpStage = document.getElementById('lotus-fp-stage');
+  if (fpStage) {
+    fpStage.textContent = s.stageName || 'Dormant';
+    fpStage.style.color = glow;
+  }
+  const fpLevel = document.getElementById('lotus-fp-level');
+  if (fpLevel) fpLevel.textContent = s.level || 1;
+  const fpMood = document.getElementById('lotus-fp-mood');
+  if (fpMood) fpMood.textContent = s.mood || 'idle';
+  const fpHp = document.getElementById('lotus-fp-hp');
+  if (fpHp) fpHp.textContent = s.hp || 100;
+  const fpXp = document.getElementById('lotus-fp-xp');
+  if (fpXp) fpXp.textContent = s.xp || 0;
+
+  // Dashboard mini stats
+  const dStage = document.getElementById('lotus-stage');
+  if (dStage) { dStage.textContent = s.stageName || 'Dormant'; dStage.style.color = glow; }
+  const dLevel = document.getElementById('lotus-level');
+  if (dLevel) dLevel.textContent = s.level || 1;
+  const dMood = document.getElementById('lotus-mood');
+  if (dMood) dMood.textContent = s.mood || 'idle';
+  const dHp = document.getElementById('lotus-hp');
+  if (dHp) dHp.textContent = s.hp || 100;
+}, 2000);
+</script>
+</body>
+</html>

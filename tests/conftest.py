@@ -50,6 +50,8 @@ def sample_portfolio_state():
                 "direction": "long",
                 "entry_price": 62500.0,
                 "position_size_pct": 3.5,
+                "quantity": 0.0056,
+                "stop_loss_price": 59375.0,
             }
         ],
         "daily_pnl": 1.5,
