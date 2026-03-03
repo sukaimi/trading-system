@@ -14,8 +14,8 @@ from typing import Any
 
 from core.llm_client import LLMClient
 from core.logger import setup_logger
+from core.asset_registry import get_registry, get_tradeable_assets
 from core.schemas import (
-    Asset,
     ConfirmingSignal,
     ConfirmingSignals,
     Direction,
@@ -47,9 +47,12 @@ Current Market Context:
 {market_context}
 
 Requirements:
-- Minimum 2 of 3 confirming signals (fundamental, technical, cross-asset)
-- Confidence 0.8-1.0 = all 3 confirm, 0.6-0.79 = 2 of 3, below 0.6 = no trade
-- Position sizing: 3% for 0.6-0.7 confidence, 5% for 0.7-0.8, 7% for 0.8+
+- There are 4 confirming signal types: fundamental, technical indicators, cross-asset, chart pattern
+- Chart pattern analysis is done separately — focus on fundamental, technical indicators, and cross-asset here
+- Minimum 1 confirming signal to propose a micro-position, 2+ for standard position
+- Confidence 0.8-1.0 = 3+ confirm, 0.5-0.79 = 2 of 4, 0.4-0.49 = 1 signal (micro-position)
+- Position sizing: 2% for 0.4-0.5 confidence, 4% for 0.5-0.65, 7% for 0.65+
+- During paper trading: we want DATA — propose trades even with modest confidence
 
 Return a JSON object with:
 - "asset", "direction" (long/short/neutral), "confidence" (0.0-1.0)
@@ -60,7 +63,7 @@ Return a JSON object with:
 - "supporting_data" (key indicators)
 - "what_could_go_wrong" (list of risks)
 
-If no trade warranted (confidence < 0.6), return {{"no_trade": true, "reason": "..."}}"""
+If no trade warranted (confidence < 0.4), return {{"no_trade": true, "reason": "..."}}"""
 
 
 class MarketAnalyst:
@@ -81,7 +84,7 @@ class MarketAnalyst:
 
     def analyze_signal(self, signal_alert: SignalAlert) -> TradeThesis | None:
         """Analyze a signal and generate a trade thesis or None."""
-        asset = signal_alert.asset.value
+        asset = signal_alert.asset
         if asset == "MACRO":
             # Macro signals analyzed across all tradeable assets
             return None
@@ -133,15 +136,15 @@ class MarketAnalyst:
     def scheduled_analysis(self, session: str) -> list[TradeThesis]:
         """Run scheduled market analysis for all assets."""
         log.info("Running scheduled analysis: %s", session)
-        assets = [Asset.BTC, Asset.ETH, Asset.GLDM, Asset.SLV]
+        assets = get_tradeable_assets()
         theses = []
 
         for asset in assets:
             # Create a synthetic signal for scheduled analysis
             signal = SignalAlert(
-                asset=asset,
+                asset=asset,  # already a string from registry
                 signal_strength=0.5,
-                headline=f"Scheduled {session} analysis for {asset.value}",
+                headline=f"Scheduled {session} analysis for {asset}",
                 sentiment="neutral",
                 category="macro",
                 new_information=f"Scheduled {session} scan",
@@ -159,7 +162,8 @@ class MarketAnalyst:
         """Determine if thesis should be escalated to Kimi."""
         if thesis.confidence >= 0.6 and thesis.suggested_position_pct > 3.0:
             return True
-        if thesis.asset in (Asset.BTC, Asset.ETH) and thesis.time_horizon == TimeHorizon.SWING:
+        asset_config = get_registry().get_config(thesis.asset)
+        if asset_config.get("escalate_swing") and thesis.time_horizon == TimeHorizon.SWING:
             return True
         if len(thesis.what_could_go_wrong) >= 3:
             return True
@@ -224,17 +228,17 @@ class MarketAnalyst:
                 ),
             )
 
-            # Map confidence to position size
+            # Map confidence to tiered position size (Kelly-inspired)
             confidence = float(llm_result.get("confidence", 0.0))
-            if confidence >= 0.8:
+            if confidence >= 0.65:
                 default_size = 7.0
-            elif confidence >= 0.7:
-                default_size = 5.0
+            elif confidence >= 0.50:
+                default_size = 4.0
             else:
-                default_size = 3.0
+                default_size = 2.0  # Micro position — generate data
 
             thesis = TradeThesis(
-                asset=Asset(llm_result.get("asset", signal.asset.value)),
+                asset=llm_result.get("asset", signal.asset),
                 direction=Direction(llm_result.get("direction", "neutral")),
                 confidence=confidence,
                 thesis=llm_result.get("thesis", ""),

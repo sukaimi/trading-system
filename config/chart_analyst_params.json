@@ -1,0 +1,5 @@
+{
+  "min_pattern_confidence": 0.4,
+  "volume_confirmation_required": false,
+  "lookback_days": 60
+}

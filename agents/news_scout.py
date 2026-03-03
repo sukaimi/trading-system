@@ -14,7 +14,8 @@ from typing import Any
 
 from core.llm_client import LLMClient
 from core.logger import setup_logger
-from core.schemas import Asset, Sentiment, SignalAlert, SignalCategory, Urgency
+from core.asset_registry import get_tradeable_assets
+from core.schemas import Sentiment, SignalAlert, SignalCategory, Urgency
 from tools.news_fetcher import NewsFetcher
 
 log = setup_logger("trading.news_scout")
@@ -29,7 +30,7 @@ You NEVER forward recycled opinion pieces. You ONLY escalate when you detect gen
 CLASSIFY_PROMPT = """Analyze the following news articles and classify each as a trading signal.
 
 For each article that contains genuinely actionable information, return a JSON object with:
-- "asset": one of "BTC", "ETH", "GLDM", "SLV", "MACRO"
+- "asset": one of {valid_assets}
 - "signal_strength": 0.0-1.0 (0.8-1.0=CRITICAL, 0.5-0.7=NOTABLE, 0.3-0.4=MONITOR, <0.3=NOISE)
 - "headline": max 100 chars summary
 - "sentiment": "bullish", "bearish", "neutral", or "uncertain"
@@ -87,7 +88,8 @@ class NewsScout:
             for i, a in enumerate(articles[:20])  # Limit to 20 articles per batch
         )
 
-        prompt = CLASSIFY_PROMPT.format(articles=article_text)
+        valid_assets = ", ".join(f'"{a}"' for a in get_tradeable_assets() + ["MACRO"])
+        prompt = CLASSIFY_PROMPT.format(articles=article_text, valid_assets=valid_assets)
         result = self._llm.call_deepseek(prompt, SYSTEM_PROMPT)
 
         if isinstance(result, list):
@@ -154,7 +156,7 @@ class NewsScout:
             # Build SignalAlert
             try:
                 alert = SignalAlert(
-                    asset=Asset(sig.get("asset", "MACRO")),
+                    asset=sig.get("asset", "MACRO"),
                     signal_strength=strength,
                     headline=headline[:100],
                     sentiment=Sentiment(sig.get("sentiment", "neutral")),

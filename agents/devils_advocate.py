@@ -34,17 +34,19 @@ log = setup_logger("trading.devils_advocate")
 CONFIG_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "config")
 PARAMS_FILE = os.path.join(CONFIG_DIR, "devils_advocate_params.json")
 
-SYSTEM_PROMPT = """You are "The Executioner" — a former risk manager at Citadel who killed 60% of proposed trades before execution. You maintained a net positive score over 8 years.
+SYSTEM_PROMPT = """You are "The Risk Adjuster" — a former risk manager at Citadel who calibrated position sizes across 8 profitable years. You believe every thesis deserves a hearing, but the SIZE must match the conviction.
 
 Your methodology:
-1. ASSUME THE THESIS IS WRONG
-2. IDENTIFY THE CROWDED TRADE
-3. STRESS TEST the key assumption
-4. CHECK THE BASE RATE
-5. FIND SECOND-ORDER EFFECTS
+1. ASSUME THE THESIS IS WRONG — then size accordingly
+2. IDENTIFY THE CROWDED TRADE — reduce size, don't kill
+3. STRESS TEST the key assumption — adjust confidence
+4. CHECK THE BASE RATE — inform sizing
+5. FIND SECOND-ORDER EFFECTS — flag but don't auto-kill
 
 Three outputs: APPROVED | APPROVED_WITH_MODIFICATION | KILLED
-You approve ~40% of trades."""
+You kill trades ONLY for structural reasons (duplicate asset, near daily loss limit).
+Most trades get APPROVED_WITH_MODIFICATION with adjusted size.
+During paper trading, data > protection."""
 
 CHALLENGE_PROMPT = """Challenge this trade thesis on ALL 7 dimensions.
 
@@ -63,7 +65,8 @@ For each dimension, provide your analysis:
 5. HISTORICAL BASE RATE — What % of similar setups historically profited? Sample size?
 6. SECOND-ORDER EFFECTS — Non-obvious consequences that could reverse the trade?
 7. SIZE APPROPRIATENESS — Is the proposed size right for the confidence level?
-   (0.6-0.7 confidence = 3%, 0.7-0.8 = 5%, 0.8+ = 7%)
+   (0.4-0.5 confidence = 2%, 0.5-0.65 = 4%, 0.65+ = 7%)
+   Note: there are now 4 confirming signals (fundamental, technical, cross-asset, chart pattern)
 
 Return JSON:
 {{
@@ -139,13 +142,29 @@ class DevilsAdvocate:
         # Step 4: Count flags
         flags = self._count_flags(challenges)
 
-        # Step 5: Determine verdict
-        verdict = self._determine_verdict(flags, [])
-
+        # Step 5: Determine verdict — prefer downsizing over killing
         confidence_adjusted = float(result.get("confidence_adjusted", trade_thesis.confidence * 0.9))
         modifications = result.get("modifications", [])
 
-        log.info("Devil's verdict: %s (%d flags raised)", verdict.value, flags)
+        kill_threshold = self._params.get("kill_thresholds", {}).get(
+            "min_challenges_for_kill", 6
+        )
+
+        if flags >= kill_threshold:
+            # Even at kill threshold, downgrade to micro position instead of full kill
+            verdict = Verdict.APPROVED_WITH_MODIFICATION
+            confidence_adjusted = min(confidence_adjusted, 0.42)  # Forces 2% micro position
+            modifications.append(f"High flag count ({flags}) — downsized to micro position")
+            log.info("Devil's verdict: DOWNGRADED to micro (was KILL with %d flags)", flags)
+        elif flags >= 2:
+            verdict = Verdict.APPROVED_WITH_MODIFICATION
+            # Scale down confidence proportionally to flags
+            flag_penalty = flags * 0.05
+            confidence_adjusted = max(0.40, confidence_adjusted - flag_penalty)
+            log.info("Devil's verdict: APPROVED_WITH_MODIFICATION (%d flags, adj conf %.2f)", flags, confidence_adjusted)
+        else:
+            verdict = Verdict.APPROVED
+            log.info("Devil's verdict: APPROVED (%d flags)", flags)
 
         return DevilsVerdict(
             original_thesis_id=thesis_id,
@@ -172,23 +191,24 @@ class DevilsAdvocate:
         # 2. Trade adds >50% correlation to existing positions
         existing = portfolio_state.get("open_positions", [])
         for pos in existing:
-            if pos.get("asset") == thesis.asset.value:
-                flaws.append(f"Duplicate asset {thesis.asset.value} already in portfolio")
+            if pos.get("asset") == thesis.asset:
+                flaws.append(f"Duplicate asset {thesis.asset} already in portfolio")
                 break
 
         # 3. No invalidation level defined
         if not thesis.invalidation_level:
             flaws.append("No invalidation level defined")
 
-        # 4. Thesis relies on single unconfirmed source
+        # 4. Thesis has zero confirming signals (out of 4: fundamental, technical, cross_asset, chart_pattern)
         signals = thesis.confirming_signals
         confirmed_count = sum([
             signals.fundamental.present,
             signals.technical.present,
             signals.cross_asset.present,
+            signals.chart_pattern.present,
         ])
-        if confirmed_count < 2:
-            flaws.append("Fewer than 2 confirming signals")
+        if confirmed_count < 1:
+            flaws.append("Zero confirming signals")
 
         return flaws
 

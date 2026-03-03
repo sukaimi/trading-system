@@ -34,6 +34,12 @@ AV_TICKERS = {
     "ETH": "CRYPTO:ETH",
     "GLDM": "GLDM",
     "SLV": "SLV",
+    "AAPL": "AAPL",
+    "NVDA": "NVDA",
+    "TSLA": "TSLA",
+    "AMZN": "AMZN",
+    "SPY": "SPY",
+    "META": "META",
 }
 
 
@@ -96,7 +102,11 @@ class NewsFetcher:
             return []
 
         if tickers is None:
-            tickers = ["BTC", "ETH", "GLDM", "SLV"]
+            try:
+                from core.asset_registry import get_tradeable_assets
+                tickers = get_tradeable_assets()
+            except Exception:
+                tickers = list(AV_TICKERS.keys())
 
         av_tickers = ",".join(AV_TICKERS.get(t, t) for t in tickers)
 

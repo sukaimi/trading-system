@@ -57,17 +57,25 @@ class Executor:
             self._ib.disconnect()
 
     def _build_contract(self, asset: str) -> Any:
-        """Build an ib_insync contract for the given asset."""
+        """Build an ib_insync contract for the given asset using registry metadata."""
         from ib_insync import Crypto, Stock
 
+        try:
+            from core.asset_registry import get_registry
+            config = get_registry().get_config(asset)
+            if config:
+                contract_type = config.get("contract_type", "Stock")
+                exchange = config.get("exchange", "SMART")
+                if contract_type == "Crypto":
+                    return Crypto(asset, exchange, "USD")
+                return Stock(asset, exchange, "USD")
+        except Exception:
+            pass
+
+        # Fallback for known assets
         if asset in ("BTC", "ETH"):
             return Crypto(asset, "PAXOS", "USD")
-        elif asset == "GLDM":
-            return Stock("GLDM", "ARCA", "USD")
-        elif asset == "SLV":
-            return Stock("SLV", "ARCA", "USD")
-        else:
-            raise ValueError(f"Unknown asset: {asset}")
+        return Stock(asset, "SMART", "USD")
 
     def execute(self, execution_order: dict[str, Any]) -> dict[str, Any]:
         """Execute a validated order. Returns confirmation or error dict."""

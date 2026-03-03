@@ -76,10 +76,11 @@ class TestApplyFilters:
         assert result[0].signal_strength == pytest.approx(0.5, abs=0.01)
 
     def test_speculation_penalty(self, scout):
-        raw = [{"signal_strength": 0.6, "headline": "BTC could rally", "asset": "BTC", "sentiment": "bullish", "category": "crypto_specific", "new_information": "might go up", "urgency": "medium"}]
+        raw = [{"signal_strength": 0.8, "headline": "BTC could rally", "asset": "BTC", "sentiment": "bullish", "category": "crypto_specific", "new_information": "might go up", "urgency": "medium"}]
         result = scout._apply_filters(raw)
-        # 0.6 - 0.3 (could/might) = 0.3 — below threshold 0.4
-        assert len(result) == 0
+        # 0.8 - 0.3 (could/might) = 0.5 — above threshold
+        assert len(result) == 1
+        assert result[0].signal_strength == pytest.approx(0.5, abs=0.01)
 
     def test_dedup(self, scout):
         raw = [

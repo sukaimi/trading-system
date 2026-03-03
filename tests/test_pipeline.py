@@ -9,7 +9,6 @@ from core.pipeline import TradingPipeline
 from core.portfolio import PortfolioState
 from core.risk_manager import RiskManager
 from core.schemas import (
-    Asset,
     ConfirmingSignal,
     ConfirmingSignals,
     DevilsVerdict,
@@ -57,7 +56,7 @@ def pipeline(risk_config):
 @pytest.fixture
 def btc_signal():
     return SignalAlert(
-        asset=Asset.BTC,
+        asset="BTC",
         signal_strength=0.8,
         headline="BTC breaks 100k",
         sentiment=Sentiment.BULLISH,
@@ -93,7 +92,7 @@ class TestProcessSingleSignal:
     def test_killed_trade(self, pipeline, btc_signal):
         # Analyst returns thesis, devil kills it
         thesis = TradeThesis(
-            asset=Asset.BTC, direction=Direction.LONG, confidence=0.7,
+            asset="BTC", direction=Direction.LONG, confidence=0.7,
             thesis="test", suggested_position_pct=5.0,
         )
         killed_verdict = DevilsVerdict(
@@ -111,7 +110,7 @@ class TestProcessSingleSignal:
 
     def test_risk_rejected(self, pipeline, btc_signal):
         thesis = TradeThesis(
-            asset=Asset.BTC, direction=Direction.LONG, confidence=0.7,
+            asset="BTC", direction=Direction.LONG, confidence=0.7,
             thesis="test", suggested_position_pct=5.0,
             invalidation_level="62000",
             supporting_data={"current_price": 65000},
@@ -138,7 +137,7 @@ class TestProcessSingleSignal:
 
     def test_execution_error(self, pipeline, btc_signal):
         thesis = TradeThesis(
-            asset=Asset.BTC, direction=Direction.LONG, confidence=0.7,
+            asset="BTC", direction=Direction.LONG, confidence=0.7,
             thesis="test", suggested_position_pct=5.0,
             invalidation_level="62000",
             supporting_data={"current_price": 65000},
@@ -160,7 +159,7 @@ class TestProcessSingleSignal:
 
     def test_successful_execution(self, pipeline, btc_signal):
         thesis = TradeThesis(
-            asset=Asset.BTC, direction=Direction.LONG, confidence=0.7,
+            asset="BTC", direction=Direction.LONG, confidence=0.7,
             thesis="test", suggested_position_pct=5.0,
             invalidation_level="62000",
             supporting_data={"current_price": 65000},
@@ -205,7 +204,7 @@ class TestRunScheduledAnalysis:
 class TestBuildExecutionOrder:
     def test_order_has_required_fields(self, pipeline):
         thesis = TradeThesis(
-            asset=Asset.ETH, direction=Direction.SHORT, confidence=0.8,
+            asset="ETH", direction=Direction.SHORT, confidence=0.8,
             thesis="test", suggested_position_pct=7.0,
             invalidation_level="3500",
             supporting_data={"current_price": 3200},

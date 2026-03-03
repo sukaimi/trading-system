@@ -23,6 +23,12 @@ YFINANCE_SYMBOLS = {
     "ETH": "ETH-USD",
     "GLDM": "GLDM",
     "SLV": "SLV",
+    "AAPL": "AAPL",
+    "NVDA": "NVDA",
+    "TSLA": "TSLA",
+    "AMZN": "AMZN",
+    "SPY": "SPY",
+    "META": "META",
     "DXY": "DX-Y.NYB",
     "VIX": "^VIX",
 }

@@ -44,13 +44,14 @@ class TestBuildContract:
             contract = executor._build_contract("SLV")
             Stock.assert_called_with("SLV", "ARCA", "USD")
 
-    def test_unknown_asset_raises(self):
+    def test_unknown_asset_falls_back_to_stock(self):
         executor = Executor()
         with patch.dict("sys.modules", {
             "ib_insync": MagicMock(),
         }):
-            with pytest.raises(ValueError, match="Unknown asset"):
-                executor._build_contract("INVALID")
+            from ib_insync import Stock
+            contract = executor._build_contract("UNKNOWN")
+            Stock.assert_called_with("UNKNOWN", "SMART", "USD")
 
 
 class TestExecutorInit:

@@ -10,18 +10,16 @@ from datetime import datetime
 from enum import Enum
 from typing import Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
+
+
+def _validate_asset(v: str) -> str:
+    """Validate asset symbol against the dynamic registry."""
+    from core.asset_registry import validate_asset  # lazy import to avoid circular
+    return validate_asset(v)
 
 
 # ── Enums ──────────────────────────────────────────────────────────────
-
-class Asset(str, Enum):
-    BTC = "BTC"
-    ETH = "ETH"
-    GLDM = "GLDM"
-    SLV = "SLV"
-    MACRO = "MACRO"
-
 
 class Direction(str, Enum):
     LONG = "long"
@@ -87,8 +85,13 @@ class SignalAlert(BaseModel):
     type: str = "signal_alert"
     timestamp: datetime = Field(default_factory=datetime.utcnow)
     source: str = "news_scout"
-    asset: Asset
+    asset: str
     signal_strength: float = Field(ge=0.0, le=1.0)
+
+    @field_validator("asset")
+    @classmethod
+    def check_asset(cls, v: str) -> str:
+        return _validate_asset(v)
     headline: str = Field(max_length=100)
     sentiment: Sentiment
     category: SignalCategory
@@ -110,6 +113,7 @@ class ConfirmingSignals(BaseModel):
     fundamental: ConfirmingSignal = ConfirmingSignal(present=False)
     technical: ConfirmingSignal = ConfirmingSignal(present=False)
     cross_asset: ConfirmingSignal = ConfirmingSignal(present=False)
+    chart_pattern: ConfirmingSignal = ConfirmingSignal(present=False)
 
 
 # ── Trade Thesis (Market Analyst → Devil's Advocate) ──────────────────
@@ -120,7 +124,12 @@ class TradeThesis(BaseModel):
     source: str = "market_analyst"
     model_used: str = "deepseek"
     escalated: bool = False
-    asset: Asset
+    asset: str
+
+    @field_validator("asset")
+    @classmethod
+    def check_asset(cls, v: str) -> str:
+        return _validate_asset(v)
     direction: Direction
     confidence: float = Field(ge=0.0, le=1.0)
     thesis: str
@@ -207,7 +216,12 @@ class ExecutionOrder(BaseModel):
     timestamp: datetime = Field(default_factory=datetime.utcnow)
     source: str = "risk_manager"
     thesis_id: str
-    asset: Asset
+    asset: str
+
+    @field_validator("asset")
+    @classmethod
+    def check_asset(cls, v: str) -> str:
+        return _validate_asset(v)
     direction: Direction
     quantity: float
     order_type: str = "market"
@@ -223,7 +237,12 @@ class OrderConfirmation(BaseModel):
     type: str = "order_confirmation"
     timestamp: datetime = Field(default_factory=datetime.utcnow)
     order_id: int = 0
-    asset: Asset
+    asset: str
+
+    @field_validator("asset")
+    @classmethod
+    def check_asset(cls, v: str) -> str:
+        return _validate_asset(v)
     direction: Direction
     quantity: float
     fill_price: float = 0.0
@@ -263,7 +282,12 @@ class JournalEntry(BaseModel):
     trade_id: str
     timestamp_open: datetime = Field(default_factory=datetime.utcnow)
     timestamp_close: Optional[datetime] = None
-    asset: Asset
+    asset: str
+
+    @field_validator("asset")
+    @classmethod
+    def check_asset(cls, v: str) -> str:
+        return _validate_asset(v)
     direction: Direction
     entry_price: float
     exit_price: Optional[float] = None

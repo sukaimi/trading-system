@@ -5,7 +5,8 @@
     "currency": "USD",
     "contract_type": "Crypto",
     "trading_hours": "24/7",
-    "min_order_size": 0.0001
+    "min_order_size": 0.0001,
+    "escalate_swing": true
   },
   "ETH": {
     "exchange": "PAXOS",
@@ -13,7 +14,8 @@
     "currency": "USD",
     "contract_type": "Crypto",
     "trading_hours": "24/7",
-    "min_order_size": 0.001
+    "min_order_size": 0.001,
+    "escalate_swing": true
   },
   "GLDM": {
     "exchange": "ARCA",
@@ -26,6 +28,54 @@
   "SLV": {
     "exchange": "ARCA",
     "type": "etf",
+    "currency": "USD",
+    "contract_type": "Stock",
+    "trading_hours": "09:30-16:00 ET",
+    "min_order_size": 1
+  },
+  "AAPL": {
+    "exchange": "NASDAQ",
+    "type": "stock",
+    "currency": "USD",
+    "contract_type": "Stock",
+    "trading_hours": "09:30-16:00 ET",
+    "min_order_size": 1
+  },
+  "NVDA": {
+    "exchange": "NASDAQ",
+    "type": "stock",
+    "currency": "USD",
+    "contract_type": "Stock",
+    "trading_hours": "09:30-16:00 ET",
+    "min_order_size": 1
+  },
+  "TSLA": {
+    "exchange": "NASDAQ",
+    "type": "stock",
+    "currency": "USD",
+    "contract_type": "Stock",
+    "trading_hours": "09:30-16:00 ET",
+    "min_order_size": 1
+  },
+  "AMZN": {
+    "exchange": "NASDAQ",
+    "type": "stock",
+    "currency": "USD",
+    "contract_type": "Stock",
+    "trading_hours": "09:30-16:00 ET",
+    "min_order_size": 1
+  },
+  "SPY": {
+    "exchange": "ARCA",
+    "type": "etf",
+    "currency": "USD",
+    "contract_type": "Stock",
+    "trading_hours": "09:30-16:00 ET",
+    "min_order_size": 1
+  },
+  "META": {
+    "exchange": "NASDAQ",
+    "type": "stock",
     "currency": "USD",
     "contract_type": "Stock",
     "trading_hours": "09:30-16:00 ET",

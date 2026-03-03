@@ -20,13 +20,24 @@ from core.logger import setup_logger
 
 log = setup_logger("trading.alpaca_executor")
 
-# Alpaca asset symbol mapping
-SYMBOL_MAP = {
-    "BTC": "BTC/USD",
-    "ETH": "ETH/USD",
-    "GLDM": "GLDM",
-    "SLV": "SLV",
-}
+def _get_alpaca_symbol(asset: str) -> str | None:
+    """Map asset to Alpaca symbol using registry metadata."""
+    try:
+        from core.asset_registry import get_registry
+        registry = get_registry()
+        config = registry.get_config(asset)
+        if config:
+            asset_type = config.get("type", "")
+            if asset_type == "crypto":
+                return f"{asset}/USD"
+            # Stocks and ETFs use the ticker directly
+            return asset
+    except Exception:
+        pass
+    # Fallback for crypto
+    if asset in ("BTC", "ETH"):
+        return f"{asset}/USD"
+    return asset
 
 
 class AlpacaExecutor:
@@ -73,7 +84,7 @@ class AlpacaExecutor:
         stop_loss = execution_order.get("stop_loss")
         thesis_id = execution_order.get("thesis_id", "")
 
-        symbol = SYMBOL_MAP.get(asset)
+        symbol = _get_alpaca_symbol(asset)
         if not symbol:
             return {
                 "type": "order_error",

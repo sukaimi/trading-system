@@ -8,7 +8,6 @@ import pytest
 
 from core.llm_client import LLMClient
 from core.schemas import (
-    Asset,
     ConfirmingSignal,
     ConfirmingSignals,
     DevilsVerdict,
@@ -119,7 +118,7 @@ def mock_llm_client():
 def sample_signal_alert():
     """A typical BTC bullish signal alert."""
     return SignalAlert(
-        asset=Asset.BTC,
+        asset="BTC",
         signal_strength=0.8,
         headline="BTC breaks resistance at 100k",
         sentiment=Sentiment.BULLISH,
@@ -134,7 +133,7 @@ def sample_signal_alert():
 def sample_trade_thesis():
     """A valid BTC long trade thesis."""
     return TradeThesis(
-        asset=Asset.BTC,
+        asset="BTC",
         direction=Direction.LONG,
         confidence=0.75,
         thesis="BTC breaking out above key resistance with strong volume",

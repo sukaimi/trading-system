@@ -115,6 +115,13 @@ async def get_market() -> dict[str, Any]:
         return {}
 
 
+@app.get("/api/phantom")
+async def get_phantom() -> dict[str, Any]:
+    return _read_json(os.path.join(DATA_DIR, "phantom_trades.json"), {
+        "total_missed": 0, "recent": [],
+    })
+
+
 @app.get("/api/events/recent")
 async def get_recent_events() -> list[dict[str, Any]]:
     return event_bus.get_recent(50)
@@ -123,7 +130,7 @@ async def get_recent_events() -> list[dict[str, Any]]:
 @app.get("/api/config")
 async def get_config() -> dict[str, Any]:
     result: dict[str, Any] = {}
-    for name in ("risk_params", "assets", "news_scout_params", "market_analyst_params", "devils_advocate_params"):
+    for name in ("risk_params", "assets", "news_scout_params", "market_analyst_params", "devils_advocate_params", "chart_analyst_params"):
         path = os.path.join(CONFIG_DIR, f"{name}.json")
         data = _read_json(path, None)
         if data is not None:
@@ -163,9 +170,14 @@ def _read_json(path: str, default: Any) -> Any:
 
 def _fetch_market_prices() -> dict[str, Any]:
     from tools.market_data import MarketDataFetcher
+    try:
+        from core.asset_registry import get_tradeable_assets
+        symbols = get_tradeable_assets()
+    except Exception:
+        symbols = ["BTC", "ETH", "GLDM", "SLV"]
     mdf = MarketDataFetcher()
     prices: dict[str, Any] = {}
-    for symbol in ("BTC", "ETH", "GLDM", "SLV"):
+    for symbol in symbols:
         try:
             prices[symbol] = mdf.get_price(symbol)
         except Exception:

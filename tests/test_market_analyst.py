@@ -7,7 +7,6 @@ import pytest
 from agents.market_analyst import MarketAnalyst
 from core.llm_client import LLMClient
 from core.schemas import (
-    Asset,
     ConfirmingSignal,
     ConfirmingSignals,
     Direction,
@@ -67,7 +66,7 @@ def analyst(mock_llm, mock_market_data, mock_indicators, mock_correlation):
 @pytest.fixture
 def btc_signal():
     return SignalAlert(
-        asset=Asset.BTC,
+        asset="BTC",
         signal_strength=0.8,
         headline="BTC breaks 100k",
         sentiment=Sentiment.BULLISH,
@@ -81,7 +80,7 @@ def btc_signal():
 class TestAnalyzeSignal:
     def test_returns_none_for_macro(self, analyst):
         signal = SignalAlert(
-            asset=Asset.MACRO, signal_strength=0.5, headline="Macro",
+            asset="MACRO", signal_strength=0.5, headline="Macro",
             sentiment=Sentiment.NEUTRAL, category=SignalCategory.MACRO,
             new_information="", urgency=Urgency.LOW, confidence_in_classification=0.5,
         )
@@ -104,28 +103,28 @@ class TestScheduledAnalysis:
 class TestShouldEscalate:
     def test_high_confidence_large_position(self, analyst):
         thesis = TradeThesis(
-            asset=Asset.BTC, direction=Direction.LONG, confidence=0.75,
+            asset="BTC", direction=Direction.LONG, confidence=0.75,
             thesis="test", suggested_position_pct=5.0,
         )
         assert analyst.should_escalate(thesis) is True
 
     def test_low_confidence_small_position(self, analyst):
         thesis = TradeThesis(
-            asset=Asset.GLDM, direction=Direction.LONG, confidence=0.5,
+            asset="GLDM", direction=Direction.LONG, confidence=0.5,
             thesis="test", suggested_position_pct=2.0,
         )
         assert analyst.should_escalate(thesis) is False
 
     def test_crypto_swing(self, analyst):
         thesis = TradeThesis(
-            asset=Asset.BTC, direction=Direction.LONG, confidence=0.5,
+            asset="BTC", direction=Direction.LONG, confidence=0.5,
             thesis="test", suggested_position_pct=2.0, time_horizon=TimeHorizon.SWING,
         )
         assert analyst.should_escalate(thesis) is True
 
     def test_many_risks(self, analyst):
         thesis = TradeThesis(
-            asset=Asset.SLV, direction=Direction.SHORT, confidence=0.5,
+            asset="SLV", direction=Direction.SHORT, confidence=0.5,
             thesis="test", suggested_position_pct=2.0,
             what_could_go_wrong=["r1", "r2", "r3"],
         )

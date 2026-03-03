@@ -80,7 +80,7 @@ class TradeJournal:
         )
 
         self._append_entry(entry.model_dump(mode="json"))
-        log.info("Recorded trade entry: %s %s %s", trade_id, thesis.asset.value, thesis.direction.value)
+        log.info("Recorded trade entry: %s %s %s", trade_id, thesis.asset, thesis.direction.value)
         return entry
 
     def record_exit(
@@ -122,13 +122,13 @@ class TradeJournal:
         record = {
             "type": "no_trade",
             "timestamp": datetime.utcnow().isoformat(),
-            "asset": signal.asset.value,
+            "asset": signal.asset,
             "signal_strength": signal.signal_strength,
             "headline": signal.headline,
             "reasoning": reasoning,
         }
         self._append_entry(record)
-        log.info("Recorded no-trade decision for %s", signal.asset.value)
+        log.info("Recorded no-trade decision for %s", signal.asset)
         return record
 
     def record_killed_trade(
@@ -138,7 +138,7 @@ class TradeJournal:
         record = {
             "type": "killed_trade",
             "timestamp": datetime.utcnow().isoformat(),
-            "asset": thesis.asset.value,
+            "asset": thesis.asset,
             "direction": thesis.direction.value,
             "thesis_summary": thesis.thesis,
             "confidence": thesis.confidence,
@@ -148,7 +148,7 @@ class TradeJournal:
             "final_reasoning": verdict.final_reasoning,
         }
         self._append_entry(record)
-        log.info("Recorded killed trade for %s", thesis.asset.value)
+        log.info("Recorded killed trade for %s", thesis.asset)
         return record
 
     def assemble_weekly_package(

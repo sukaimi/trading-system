@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from agents.chart_analyst import ChartAnalyst
 from agents.circuit_breaker_agent import CircuitBreakerAgent
 from agents.devils_advocate import DevilsAdvocate
 from agents.market_analyst import MarketAnalyst
@@ -19,10 +20,11 @@ from core.event_bus import event_bus
 from core.executor import Executor
 from core.llm_client import LLMClient
 from core.logger import setup_logger
+from core.phantom_tracker import PhantomTracker
 from core.portfolio import PortfolioState
 from core.risk_manager import RiskManager
 from core.schemas import (
-    Asset,
+    ConfirmingSignal,
     ExecutionOrder,
     OrderConfirmation,
     OrderStatus,
@@ -56,6 +58,7 @@ class TradingPipeline:
         # Create agents with shared LLM client
         self._news_scout = NewsScout(llm_client=self._llm)
         self._analyst = MarketAnalyst(llm_client=self._llm)
+        self._chart = ChartAnalyst(llm_client=self._llm)
         self._devil = DevilsAdvocate(llm_client=self._llm)
         self._journal = TradeJournal(llm_client=self._llm)
         self._circuit_breaker = CircuitBreakerAgent(
@@ -64,6 +67,7 @@ class TradingPipeline:
             portfolio=self._portfolio,
             telegram=self._telegram,
         )
+        self._phantom = PhantomTracker()
 
     def run_news_scan(self) -> list[SignalAlert]:
         """Run a news scan and process any signals found."""
@@ -78,7 +82,7 @@ class TradingPipeline:
             log.info("News scan produced %d signals", len(signals))
             event_bus.emit("pipeline", "news_scan_complete", {
                 "signal_count": len(signals),
-                "signals": [{"headline": s.headline, "asset": s.asset.value, "strength": s.signal_strength} for s in signals],
+                "signals": [{"headline": s.headline, "asset": s.asset, "strength": s.signal_strength} for s in signals],
             })
 
             if signals:
@@ -102,7 +106,7 @@ class TradingPipeline:
         """Process one signal through: Analyst → Devil → Risk → Execute → Journal."""
         result: dict[str, Any] = {
             "signal": signal.headline,
-            "asset": signal.asset.value,
+            "asset": signal.asset,
             "outcome": "no_trade",
         }
 
@@ -110,14 +114,14 @@ class TradingPipeline:
         try:
             thesis = self._analyst.analyze_signal(signal)
         except Exception as e:
-            log.error("Market Analyst failed for %s: %s", signal.asset.value, e)
+            log.error("Market Analyst failed for %s: %s", signal.asset, e)
             result["outcome"] = "analyst_error"
             result["error"] = str(e)
             return result
 
         if thesis is None:
-            log.info("No trade thesis for %s — recording no-trade", signal.asset.value)
-            event_bus.emit("pipeline", "no_thesis", {"asset": signal.asset.value, "signal_headline": signal.headline})
+            log.info("No trade thesis for %s — recording no-trade", signal.asset)
+            event_bus.emit("pipeline", "no_thesis", {"asset": signal.asset, "signal_headline": signal.headline})
             try:
                 self._journal.record_no_trade(signal, "No thesis generated")
             except Exception as e:
@@ -128,36 +132,50 @@ class TradingPipeline:
         result["thesis"] = thesis.thesis
         result["confidence"] = thesis.confidence
         event_bus.emit("pipeline", "thesis_generated", {
-            "asset": thesis.asset.value, "direction": thesis.direction.value,
+            "asset": thesis.asset, "direction": thesis.direction.value,
             "confidence": thesis.confidence, "thesis": thesis.thesis[:200],
         })
+
+        # Step 1b: Chart Analyst — independent price action analysis
+        thesis = self._enrich_with_chart(thesis)
 
         # Step 2: Devil's Advocate challenges
         try:
             portfolio_state = self._portfolio.snapshot()
             verdict = self._devil.challenge(thesis, portfolio_state)
         except Exception as e:
-            log.error("Devil's Advocate failed for %s: %s", signal.asset.value, e)
+            log.error("Devil's Advocate failed for %s: %s", signal.asset, e)
             result["outcome"] = "devil_error"
             result["error"] = str(e)
             return result
 
         result["verdict"] = verdict.verdict.value
         event_bus.emit("pipeline", "devil_verdict", {
-            "asset": signal.asset.value, "verdict": verdict.verdict.value,
+            "asset": signal.asset, "verdict": verdict.verdict.value,
             "flags_raised": verdict.flags_raised, "reasoning": verdict.final_reasoning[:200],
         })
 
         if verdict.verdict == Verdict.KILLED:
             log.info("Trade KILLED by Devil's Advocate: %s", verdict.final_reasoning)
             event_bus.emit("pipeline", "trade_killed", {
-                "asset": signal.asset.value, "killed_by": "devils_advocate",
+                "asset": signal.asset, "killed_by": "devils_advocate",
                 "reasoning": verdict.final_reasoning[:200],
             })
             try:
                 self._journal.record_killed_trade(thesis, verdict)
             except Exception as e:
                 log.error("Journal record_killed_trade failed: %s", e)
+            # Record phantom trade
+            self._phantom.record_missed(
+                asset=thesis.asset,
+                direction=thesis.direction.value,
+                confidence=thesis.confidence,
+                killed_by="devils_advocate",
+                reason=verdict.final_reasoning[:200],
+                entry_price=thesis.supporting_data.get("current_price", 0),
+                suggested_position_pct=thesis.suggested_position_pct,
+                thesis=thesis.thesis,
+            )
             result["outcome"] = "killed"
             return result
 
@@ -168,13 +186,13 @@ class TradingPipeline:
                 exec_order, self._portfolio.snapshot()
             )
         except Exception as e:
-            log.error("Risk validation failed for %s: %s", signal.asset.value, e)
+            log.error("Risk validation failed for %s: %s", signal.asset, e)
             result["outcome"] = "risk_error"
             result["error"] = str(e)
             return result
 
         event_bus.emit("pipeline", "risk_check", {
-            "asset": signal.asset.value, "approved": approved, "reason": reason,
+            "asset": signal.asset, "approved": approved, "reason": reason,
         })
 
         if not approved:
@@ -183,6 +201,17 @@ class TradingPipeline:
                 self._journal.record_killed_trade(thesis, verdict)
             except Exception as e:
                 log.error("Journal record_killed_trade failed: %s", e)
+            # Record phantom trade
+            self._phantom.record_missed(
+                asset=thesis.asset,
+                direction=thesis.direction.value,
+                confidence=thesis.confidence,
+                killed_by="risk_manager",
+                reason=reason,
+                entry_price=thesis.supporting_data.get("current_price", 0),
+                suggested_position_pct=thesis.suggested_position_pct,
+                thesis=thesis.thesis,
+            )
             result["outcome"] = "risk_rejected"
             result["risk_reason"] = reason
             return result
@@ -193,7 +222,7 @@ class TradingPipeline:
         try:
             confirmation = self._executor.execute(order_to_execute)
         except Exception as e:
-            log.error("Execution failed for %s: %s", signal.asset.value, e)
+            log.error("Execution failed for %s: %s", signal.asset, e)
             result["outcome"] = "execution_error"
             result["error"] = str(e)
             return result
@@ -208,7 +237,7 @@ class TradingPipeline:
         try:
             order_conf = OrderConfirmation(
                 order_id=confirmation.get("order_id", 0),
-                asset=Asset(confirmation.get("asset", thesis.asset.value)),
+                asset=confirmation.get("asset", thesis.asset),
                 direction=thesis.direction,
                 quantity=confirmation.get("quantity", 0),
                 fill_price=confirmation.get("fill_price", 0.0),
@@ -223,7 +252,7 @@ class TradingPipeline:
         try:
             self._portfolio.add_position({
                 "trade_id": confirmation.get("order_id", ""),
-                "asset": thesis.asset.value,
+                "asset": thesis.asset,
                 "direction": thesis.direction.value,
                 "entry_price": confirmation.get("fill_price", 0.0),
                 "position_size_pct": thesis.suggested_position_pct,
@@ -238,7 +267,7 @@ class TradingPipeline:
         try:
             self._telegram.send_alert(
                 f"Trade executed: {thesis.direction.value.upper()} "
-                f"{thesis.asset.value} @ {confirmation.get('fill_price', 0)}"
+                f"{thesis.asset} @ {confirmation.get('fill_price', 0)}"
             )
         except Exception as e:
             log.error("Telegram notification failed: %s", e)
@@ -246,13 +275,13 @@ class TradingPipeline:
         result["outcome"] = "executed"
         result["fill_price"] = confirmation.get("fill_price", 0.0)
         event_bus.emit("pipeline", "trade_executed", {
-            "asset": thesis.asset.value, "direction": thesis.direction.value,
+            "asset": thesis.asset, "direction": thesis.direction.value,
             "fill_price": confirmation.get("fill_price", 0), "quantity": confirmation.get("quantity", 0),
         })
         log.info(
             "Pipeline complete: %s %s — executed",
             thesis.direction.value,
-            thesis.asset.value,
+            thesis.asset,
         )
         return result
 
@@ -434,13 +463,16 @@ class TradingPipeline:
             return []
 
     def _process_thesis(self, thesis: TradeThesis) -> dict[str, Any]:
-        """Process a thesis through Devil → Risk → Execute → Journal."""
+        """Process a thesis through Chart → Devil → Risk → Execute → Journal."""
         result: dict[str, Any] = {
-            "asset": thesis.asset.value,
+            "asset": thesis.asset,
             "thesis": thesis.thesis,
             "confidence": thesis.confidence,
             "outcome": "pending",
         }
+
+        # Chart Analyst — enrich thesis with price action signal
+        thesis = self._enrich_with_chart(thesis)
 
         # Devil's Advocate
         try:
@@ -458,6 +490,16 @@ class TradingPipeline:
                 self._journal.record_killed_trade(thesis, verdict)
             except Exception as e:
                 log.error("Journal failed: %s", e)
+            self._phantom.record_missed(
+                asset=thesis.asset,
+                direction=thesis.direction.value,
+                confidence=thesis.confidence,
+                killed_by="devils_advocate",
+                reason=verdict.final_reasoning[:200],
+                entry_price=thesis.supporting_data.get("current_price", 0),
+                suggested_position_pct=thesis.suggested_position_pct,
+                thesis=thesis.thesis,
+            )
             result["outcome"] = "killed"
             return result
 
@@ -473,6 +515,16 @@ class TradingPipeline:
             return result
 
         if not approved:
+            self._phantom.record_missed(
+                asset=thesis.asset,
+                direction=thesis.direction.value,
+                confidence=thesis.confidence,
+                killed_by="risk_manager",
+                reason=reason,
+                entry_price=thesis.supporting_data.get("current_price", 0),
+                suggested_position_pct=thesis.suggested_position_pct,
+                thesis=thesis.thesis,
+            )
             result["outcome"] = "risk_rejected"
             result["risk_reason"] = reason
             return result
@@ -496,7 +548,7 @@ class TradingPipeline:
         try:
             order_conf = OrderConfirmation(
                 order_id=confirmation.get("order_id", 0),
-                asset=Asset(confirmation.get("asset", thesis.asset.value)),
+                asset=confirmation.get("asset", thesis.asset),
                 direction=thesis.direction,
                 quantity=confirmation.get("quantity", 0),
                 fill_price=confirmation.get("fill_price", 0.0),
@@ -510,7 +562,7 @@ class TradingPipeline:
         try:
             self._portfolio.add_position({
                 "trade_id": confirmation.get("order_id", ""),
-                "asset": thesis.asset.value,
+                "asset": thesis.asset,
                 "direction": thesis.direction.value,
                 "entry_price": confirmation.get("fill_price", 0.0),
                 "position_size_pct": thesis.suggested_position_pct,
@@ -525,6 +577,87 @@ class TradingPipeline:
         result["fill_price"] = confirmation.get("fill_price", 0.0)
         return result
 
+    def _enrich_with_chart(self, thesis: TradeThesis) -> TradeThesis:
+        """Run chart analysis and merge result into thesis confirming signals."""
+        try:
+            chart = self._chart.analyze(thesis.asset)
+            if chart.get("pattern_found"):
+                # Chart agrees with thesis direction?
+                chart_dir = chart.get("direction", "neutral")
+                thesis_dir = thesis.direction.value
+
+                agrees = (
+                    chart_dir == thesis_dir
+                    or chart_dir == "neutral"
+                )
+
+                thesis.confirming_signals.chart_pattern = ConfirmingSignal(
+                    present=agrees and chart.get("confidence", 0) >= 0.3,
+                    description=f"{chart.get('pattern_name', 'pattern')}: {chart.get('description', '')}",
+                )
+
+                # Boost confidence if chart strongly agrees
+                if agrees and chart.get("confidence", 0) >= 0.5:
+                    boost = min(0.1, chart["confidence"] * 0.15)
+                    thesis.confidence = min(1.0, thesis.confidence + boost)
+                    log.info(
+                        "Chart confirms %s %s — confidence boosted by %.2f to %.2f",
+                        thesis_dir, thesis.asset, boost, thesis.confidence,
+                    )
+
+                # Store chart data in supporting_data
+                thesis.supporting_data["chart_analysis"] = {
+                    "pattern": chart.get("pattern_name"),
+                    "direction": chart_dir,
+                    "confidence": chart.get("confidence"),
+                    "trend": chart.get("trend"),
+                    "support": chart.get("support_levels", []),
+                    "resistance": chart.get("resistance_levels", []),
+                }
+
+                event_bus.emit("pipeline", "chart_analysis", {
+                    "asset": thesis.asset,
+                    "pattern": chart.get("pattern_name"),
+                    "direction": chart_dir,
+                    "confidence": chart.get("confidence"),
+                    "agrees_with_thesis": agrees,
+                })
+            else:
+                thesis.confirming_signals.chart_pattern = ConfirmingSignal(
+                    present=False,
+                    description="No actionable chart pattern found",
+                )
+        except Exception as e:
+            log.warning("Chart analysis skipped for %s: %s", thesis.asset, e)
+            thesis.confirming_signals.chart_pattern = ConfirmingSignal(
+                present=False, description=f"Chart analysis error: {e}"
+            )
+        return thesis
+
+    @staticmethod
+    def _calculate_ev(
+        confidence: float, risk_reward_ratio: float
+    ) -> dict[str, float]:
+        """Calculate Expected Value for a trade.
+
+        EV = P(win) × R(win) - P(loss) × R(loss)
+        Where R(win) = risk_reward_ratio, R(loss) = 1.0 (risk unit).
+        Returns EV and Kelly-optimal fraction.
+        """
+        p_win = max(0.01, min(0.99, confidence))
+        p_loss = 1.0 - p_win
+        rr = max(0.1, risk_reward_ratio)
+
+        ev = p_win * rr - p_loss * 1.0
+        # Kelly fraction: f* = (p * b - q) / b  where b=rr, p=p_win, q=p_loss
+        kelly = max(0.0, (p_win * rr - p_loss) / rr)
+
+        return {
+            "ev": round(ev, 4),
+            "kelly_fraction": round(kelly, 4),
+            "positive_ev": ev > 0,
+        }
+
     def _build_execution_order(
         self, thesis: TradeThesis, verdict: Any
     ) -> dict[str, Any]:
@@ -535,6 +668,27 @@ class TradingPipeline:
             # Scale position by confidence adjustment ratio
             ratio = verdict.confidence_adjusted / max(thesis.confidence, 0.01)
             position_pct = min(position_pct * ratio, 7.0)
+
+        # EV-based sizing: scale position by Kelly fraction
+        try:
+            rr_str = thesis.risk_reward_ratio or "1.5"
+            rr = float(str(rr_str).split(":")[0]) if ":" in str(rr_str) else float(rr_str)
+        except (ValueError, TypeError):
+            rr = 1.5
+
+        confidence = verdict.confidence_adjusted if hasattr(verdict, "confidence_adjusted") and verdict.confidence_adjusted > 0 else thesis.confidence
+        ev_result = self._calculate_ev(confidence, rr)
+
+        if ev_result["positive_ev"]:
+            # Scale position by Kelly fraction (capped at suggested_position_pct)
+            kelly_pct = ev_result["kelly_fraction"] * 100
+            position_pct = min(position_pct, kelly_pct, 7.0)
+            position_pct = max(position_pct, 2.0)  # Minimum 2% micro position
+            log.info("EV: %.4f | Kelly: %.1f%% | Position: %.1f%%", ev_result["ev"], kelly_pct, position_pct)
+        else:
+            # Negative EV — still take micro position during paper trading for data
+            position_pct = 2.0
+            log.info("Negative EV (%.4f) — micro position 2%% for data", ev_result["ev"])
 
         # Calculate stop-loss from invalidation level, or default to 5% from price
         stop_loss = None
@@ -552,7 +706,7 @@ class TradingPipeline:
         if not current_price:
             try:
                 mdf = MarketDataFetcher()
-                price_data = mdf.get_price(thesis.asset.value)
+                price_data = mdf.get_price(thesis.asset)
                 current_price = price_data.get("price", 0)
             except Exception:
                 pass
@@ -573,7 +727,7 @@ class TradingPipeline:
         return {
             "type": "execution_order",
             "thesis_id": str(id(thesis)),
-            "asset": thesis.asset.value,
+            "asset": thesis.asset,
             "direction": thesis.direction.value,
             "quantity": quantity,
             "order_type": "market",

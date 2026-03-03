@@ -6,7 +6,6 @@ import pytest
 from pydantic import ValidationError
 
 from core.schemas import (
-    Asset,
     CircuitBreakerAction,
     CircuitBreakerDecision,
     ConfirmingSignal,
@@ -36,7 +35,7 @@ from core.schemas import (
 class TestSignalAlert:
     def test_valid_signal(self):
         alert = SignalAlert(
-            asset=Asset.BTC,
+            asset="BTC",
             signal_strength=0.85,
             headline="Fed signals rate pause",
             sentiment=Sentiment.BULLISH,
@@ -46,14 +45,14 @@ class TestSignalAlert:
             confidence_in_classification=0.9,
         )
         assert alert.type == "signal_alert"
-        assert alert.asset == Asset.BTC
+        assert alert.asset == "BTC"
         assert alert.signal_strength == 0.85
         assert not alert.already_priced_in
 
     def test_signal_strength_bounds(self):
         with pytest.raises(ValidationError):
             SignalAlert(
-                asset=Asset.BTC,
+                asset="BTC",
                 signal_strength=1.5,
                 headline="Too strong",
                 sentiment=Sentiment.BULLISH,
@@ -66,7 +65,7 @@ class TestSignalAlert:
     def test_headline_max_length(self):
         with pytest.raises(ValidationError):
             SignalAlert(
-                asset=Asset.ETH,
+                asset="ETH",
                 signal_strength=0.5,
                 headline="x" * 101,
                 sentiment=Sentiment.NEUTRAL,
@@ -78,7 +77,7 @@ class TestSignalAlert:
 
     def test_json_round_trip(self):
         alert = SignalAlert(
-            asset=Asset.GLDM,
+            asset="GLDM",
             signal_strength=0.6,
             headline="Gold rally",
             sentiment=Sentiment.BULLISH,
@@ -96,7 +95,7 @@ class TestSignalAlert:
 class TestTradeThesis:
     def test_valid_thesis(self):
         thesis = TradeThesis(
-            asset=Asset.BTC,
+            asset="BTC",
             direction=Direction.LONG,
             confidence=0.72,
             thesis="Fed pause + RSI oversold + gold confirming",
@@ -113,7 +112,7 @@ class TestTradeThesis:
     def test_confidence_bounds(self):
         with pytest.raises(ValidationError):
             TradeThesis(
-                asset=Asset.ETH,
+                asset="ETH",
                 direction=Direction.SHORT,
                 confidence=-0.1,
                 thesis="test",
@@ -150,7 +149,7 @@ class TestExecutionOrder:
     def test_valid_order(self):
         order = ExecutionOrder(
             thesis_id="thesis_001",
-            asset=Asset.ETH,
+            asset="ETH",
             direction=Direction.LONG,
             quantity=0.01,
             stop_loss=3000.0,
@@ -158,14 +157,14 @@ class TestExecutionOrder:
             position_size_pct=5.0,
         )
         assert order.type == "execution_order"
-        assert order.asset == Asset.ETH
+        assert order.asset == "ETH"
         assert order.order_type == "market"
 
     def test_position_size_bounds(self):
         with pytest.raises(ValidationError):
             ExecutionOrder(
                 thesis_id="test",
-                asset=Asset.BTC,
+                asset="BTC",
                 direction=Direction.LONG,
                 quantity=1,
                 position_size_pct=150.0,
@@ -176,7 +175,7 @@ class TestOrderConfirmation:
     def test_filled_order(self):
         conf = OrderConfirmation(
             order_id=12345,
-            asset=Asset.BTC,
+            asset="BTC",
             direction=Direction.LONG,
             quantity=0.001,
             fill_price=62500.0,
@@ -198,7 +197,7 @@ class TestJournalEntry:
     def test_open_trade(self):
         entry = JournalEntry(
             trade_id="trade_20260301_143500",
-            asset=Asset.BTC,
+            asset="BTC",
             direction=Direction.LONG,
             entry_price=62500.0,
             position_size_usd=3.50,
@@ -212,7 +211,7 @@ class TestJournalEntry:
     def test_closed_trade(self):
         entry = JournalEntry(
             trade_id="trade_20260301_143500",
-            asset=Asset.BTC,
+            asset="BTC",
             direction=Direction.LONG,
             entry_price=62500.0,
             exit_price=64800.0,

@@ -10,7 +10,6 @@ import pytest
 from agents.trade_journal import TradeJournal
 from core.llm_client import LLMClient
 from core.schemas import (
-    Asset,
     ConfirmingSignal,
     ConfirmingSignals,
     DevilsVerdict,
@@ -53,7 +52,7 @@ def journal(mock_llm, tmp_data_dir):
 @pytest.fixture
 def sample_thesis():
     return TradeThesis(
-        asset=Asset.BTC,
+        asset="BTC",
         direction=Direction.LONG,
         confidence=0.75,
         thesis="BTC breaking out",
@@ -80,7 +79,7 @@ def sample_verdict():
 def sample_confirmation():
     return OrderConfirmation(
         order_id=42,
-        asset=Asset.BTC,
+        asset="BTC",
         direction=Direction.LONG,
         quantity=0.01,
         fill_price=65000.0,
@@ -95,7 +94,7 @@ class TestRecordEntry:
              patch("agents.trade_journal.JOURNAL_FILE", jf):
             entry = j.record_entry(sample_thesis, sample_verdict, sample_confirmation)
             assert isinstance(entry, JournalEntry)
-            assert entry.asset == Asset.BTC
+            assert entry.asset == "BTC"
             assert entry.direction == Direction.LONG
             assert entry.entry_price == 65000.0
 
@@ -117,7 +116,7 @@ class TestRecordNoTrade:
         with patch("agents.trade_journal.DATA_DIR", os.path.dirname(jf)), \
              patch("agents.trade_journal.JOURNAL_FILE", jf):
             signal = SignalAlert(
-                asset=Asset.ETH, signal_strength=0.5, headline="Test",
+                asset="ETH", signal_strength=0.5, headline="Test",
                 sentiment=Sentiment.NEUTRAL, category=SignalCategory.MACRO,
                 new_information="", urgency=Urgency.LOW,
                 confidence_in_classification=0.5,

@@ -7,7 +7,6 @@ import pytest
 from agents.devils_advocate import DevilsAdvocate
 from core.llm_client import LLMClient
 from core.schemas import (
-    Asset,
     ConfirmingSignal,
     ConfirmingSignals,
     DevilsVerdict,
@@ -30,7 +29,7 @@ def devil(mock_llm):
 @pytest.fixture
 def valid_thesis():
     return TradeThesis(
-        asset=Asset.BTC,
+        asset="BTC",
         direction=Direction.LONG,
         confidence=0.75,
         thesis="BTC breaking out on strong volume",
@@ -48,7 +47,7 @@ def valid_thesis():
 def weak_thesis():
     """Thesis with only 1 confirming signal — should be flagged."""
     return TradeThesis(
-        asset=Asset.ETH,
+        asset="ETH",
         direction=Direction.LONG,
         confidence=0.6,
         thesis="ETH could go up",
@@ -89,7 +88,7 @@ class TestCheckFatalFlaws:
 
     def test_no_invalidation(self, devil, healthy_portfolio):
         thesis = TradeThesis(
-            asset=Asset.BTC, direction=Direction.LONG, confidence=0.7,
+            asset="BTC", direction=Direction.LONG, confidence=0.7,
             thesis="test", invalidation_level="",
             confirming_signals=ConfirmingSignals(
                 fundamental=ConfirmingSignal(present=True, description="a"),
@@ -100,17 +99,33 @@ class TestCheckFatalFlaws:
         flaws = devil.check_fatal_flaws(thesis, healthy_portfolio)
         assert any("invalidation" in f.lower() for f in flaws)
 
-    def test_few_confirming_signals(self, devil, weak_thesis, healthy_portfolio):
+    def test_one_confirming_signal_ok(self, devil, weak_thesis, healthy_portfolio):
+        # 1 confirming signal is now allowed (micro position)
         flaws = devil.check_fatal_flaws(weak_thesis, healthy_portfolio)
+        assert not any("confirming" in f.lower() for f in flaws)
+
+    def test_zero_confirming_signals_fatal(self, devil, healthy_portfolio):
+        thesis = TradeThesis(
+            asset="ETH", direction=Direction.LONG, confidence=0.5,
+            thesis="test", invalidation_level="3000",
+            confirming_signals=ConfirmingSignals(
+                fundamental=ConfirmingSignal(present=False),
+                technical=ConfirmingSignal(present=False),
+                cross_asset=ConfirmingSignal(present=False),
+            ),
+            suggested_position_pct=2.0,
+        )
+        flaws = devil.check_fatal_flaws(thesis, healthy_portfolio)
         assert any("confirming" in f.lower() for f in flaws)
 
 
 class TestChallenge:
-    def test_killed_on_fatal_flaws(self, devil, weak_thesis, healthy_portfolio):
-        # weak_thesis has only 1 confirming signal → fatal flaw
+    def test_weak_thesis_not_killed(self, devil, weak_thesis, healthy_portfolio):
+        # weak_thesis has 1 confirming signal — no longer a fatal flaw, proceeds to LLM
         verdict = devil.challenge(weak_thesis, healthy_portfolio)
         assert isinstance(verdict, DevilsVerdict)
-        assert verdict.verdict == Verdict.KILLED
+        # With 1 confirming signal, should pass fatal flaws and go to LLM challenge
+        assert verdict.verdict in (Verdict.APPROVED, Verdict.APPROVED_WITH_MODIFICATION)
 
     def test_returns_verdict_object(self, devil, valid_thesis, healthy_portfolio):
         verdict = devil.challenge(valid_thesis, healthy_portfolio)
@@ -134,8 +149,13 @@ class TestDetermineVerdict:
     def test_two_flags_modified(self, devil):
         assert devil._determine_verdict(2, []) == Verdict.APPROVED_WITH_MODIFICATION
 
-    def test_four_flags_killed(self, devil):
-        assert devil._determine_verdict(4, []) == Verdict.KILLED
+    def test_six_flags_killed(self, devil):
+        # Kill threshold is now 6 (raised from 4)
+        assert devil._determine_verdict(6, []) == Verdict.KILLED
+
+    def test_four_flags_modified(self, devil):
+        # 4 flags is now APPROVED_WITH_MODIFICATION (was KILLED at threshold 4)
+        assert devil._determine_verdict(4, []) == Verdict.APPROVED_WITH_MODIFICATION
 
     def test_fatal_flaws_killed(self, devil):
         assert devil._determine_verdict(0, ["fatal"]) == Verdict.KILLED
