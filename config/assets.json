@@ -80,5 +80,21 @@
     "contract_type": "Stock",
     "trading_hours": "09:30-16:00 ET",
     "min_order_size": 1
+  },
+  "EWS": {
+    "exchange": "ARCA",
+    "type": "etf",
+    "currency": "USD",
+    "contract_type": "Stock",
+    "trading_hours": "09:30-16:00 ET",
+    "min_order_size": 1
+  },
+  "FXI": {
+    "exchange": "ARCA",
+    "type": "etf",
+    "currency": "USD",
+    "contract_type": "Stock",
+    "trading_hours": "09:30-16:00 ET",
+    "min_order_size": 1
   }
 }

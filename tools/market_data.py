@@ -29,6 +29,8 @@ YFINANCE_SYMBOLS = {
     "AMZN": "AMZN",
     "SPY": "SPY",
     "META": "META",
+    "EWS": "EWS",
+    "FXI": "FXI",
     "DXY": "DX-Y.NYB",
     "VIX": "^VIX",
 }
