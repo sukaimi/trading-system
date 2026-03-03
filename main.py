@@ -190,7 +190,7 @@ def main():
     signal.signal(signal.SIGTERM, _shutdown)
 
     # 11. Start dashboard server
-    dashboard_port = int(os.getenv("DASHBOARD_PORT", "80"))
+    dashboard_port = int(os.getenv("DASHBOARD_PORT", "8080"))
     start_dashboard(portfolio, heartbeat, cost_tracker, port=dashboard_port)
 
     # 12. Pre-flight API connectivity check
