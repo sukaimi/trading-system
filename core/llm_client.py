@@ -75,11 +75,7 @@ class LLMClient:
         try:
             raw = self._call_openai_compatible("deepseek", prompt, system_prompt)
             result = self._parse_json_response(raw, response_schema)
-            if not isinstance(result, dict):
-                log.warning("DeepSeek returned non-dict after parsing: %s — raw[:200]: %s",
-                            type(result).__name__, raw[:200])
-                result = {"error": f"Non-dict response: {type(result).__name__}", "raw": raw[:500]}
-            if self._cost_tracker and "error" not in result:
+            if self._cost_tracker and isinstance(result, dict) and "error" not in result:
                 self._cost_tracker.record("deepseek", "pipeline", system_prompt + "\n" + prompt, raw)
             return result
         except Exception as e:
