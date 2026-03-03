@@ -94,12 +94,16 @@ async def get_scheduler() -> list[dict[str, Any]]:
         tasks = []
         for job in sched_lib.get_jobs():
             name = getattr(job.job_func, "__name__", str(job.job_func))
+            at_str = None
+            if job.at_time:
+                at_str = job.at_time.strftime("%H:%M")
             tasks.append({
                 "name": name,
-                "interval": str(job.interval),
+                "interval": job.interval,
                 "unit": job.unit,
-                "at_time": str(job.at_time) if job.at_time else None,
-                "next_run": job.next_run.isoformat() if job.next_run else None,
+                "at_time": at_str,
+                "start_day": getattr(job, "start_day", None),
+                "next_run": (job.next_run.isoformat() + "Z") if job.next_run else None,
             })
         return tasks
     except Exception:

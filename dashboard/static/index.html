@@ -1450,7 +1450,7 @@ function renderScheduler() {
   grid.innerHTML = tasks.map((t, i) => `
     <div class="sched-card">
       <div class="name">${esc(formatTaskName(t.name))}</div>
-      <div class="interval">${esc(t.interval)} ${esc(t.unit)}${t.at_time ? ' @ ' + esc(t.at_time) : ''}</div>
+      <div class="interval">${esc(formatInterval(t))}</div>
       <div class="countdown" id="countdown-${i}">--</div>
     </div>
   `).join('');
@@ -1518,6 +1518,16 @@ function esc(s) {
 }
 function formatTaskName(name) {
   return (name || '').replace(/_/g, ' ').replace(/^run /, '');
+}
+function formatInterval(t) {
+  const n = t.interval;
+  const unit = t.unit || '';
+  const at = t.at_time ? ' @ ' + t.at_time : '';
+  const day = t.start_day ? t.start_day.charAt(0).toUpperCase() + t.start_day.slice(1) : '';
+  if (n === 1 && unit === 'weeks') return day ? day + at : 'weekly' + at;
+  if (n === 1 && unit === 'days') return 'daily' + at;
+  if (n === 1) return 'every ' + unit.replace(/s$/, '') + at;
+  return 'every ' + n + ' ' + unit + at;
 }
 
 /* ── Activity Collapse Toggle ──────────────────────────────────── */
