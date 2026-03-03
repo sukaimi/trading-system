@@ -1,7 +1,8 @@
 """News fetching tools — RSS feeds and news APIs.
 
-Sources: Reuters RSS, CoinDesk RSS, Kitco RSS,
-Alpha Vantage News API, CryptoCompare News API.
+Sources: CoinDesk RSS, Kitco RSS, Yahoo Finance, MarketWatch,
+CNBC, Seeking Alpha, Investing.com, Alpha Vantage News API,
+CryptoCompare News API.
 All methods return standardized article dicts, never raise.
 """
 
@@ -20,9 +21,15 @@ from core.logger import setup_logger
 log = setup_logger("trading.news_fetcher")
 
 RSS_FEEDS = {
-    "reuters": "https://feeds.reuters.com/reuters/businessNews",
+    # Crypto
     "coindesk": "https://www.coindesk.com/arc/outboundfeeds/rss/",
     "kitco": "https://www.kitco.com/feed/",
+    # Equities & macro
+    "yahoo_finance": "https://finance.yahoo.com/news/rssindex",
+    "marketwatch": "https://feeds.marketwatch.com/marketwatch/topstories/",
+    "cnbc": "https://search.cnbc.com/rs/search/combinedcms/view.xml?partnerId=wrss01&id=100003114",
+    "seeking_alpha": "https://seekingalpha.com/market_currents.xml",
+    "investing_com": "https://www.investing.com/rss/news.rss",
 }
 
 ALPHA_VANTAGE_URL = "https://www.alphavantage.co/query"

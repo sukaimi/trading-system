@@ -85,7 +85,7 @@ class NewsScout:
             f"Source: {a.get('source', 'Unknown')}\n"
             f"Published: {a.get('published', 'Unknown')}\n"
             f"Summary: {a.get('summary', '')[:300]}"
-            for i, a in enumerate(articles[:20])  # Limit to 20 articles per batch
+            for i, a in enumerate(articles[:30])  # Limit to 30 articles per batch
         )
 
         valid_assets = ", ".join(f'"{a}"' for a in get_tradeable_assets() + ["MACRO"])
