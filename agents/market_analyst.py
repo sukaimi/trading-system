@@ -1,4 +1,4 @@
-"""Market Analyst Agent — Tier 1→2 (DeepSeek → Kimi escalation).
+"""Market Analyst Agent — Tier 1 (DeepSeek, with escalation second pass).
 
 Transforms signals into trade theses with entry/exit criteria,
 confidence scores, and risk quantification.
@@ -159,7 +159,7 @@ class MarketAnalyst:
         return theses
 
     def should_escalate(self, thesis: TradeThesis) -> bool:
-        """Determine if thesis should be escalated to Kimi."""
+        """Determine if thesis should be escalated to DeepSeek second pass."""
         if thesis.confidence >= 0.6 and thesis.suggested_position_pct > 3.0:
             return True
         asset_config = get_registry().get_config(thesis.asset)

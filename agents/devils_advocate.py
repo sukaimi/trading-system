@@ -1,4 +1,4 @@
-"""Devil's Advocate Agent — Tier 2 (Kimi K2.5).
+"""Devil's Advocate Agent — Tier 1 (DeepSeek).
 
 Contrarian risk challenger using 7-dimension challenge framework.
 Outputs APPROVED, APPROVED_WITH_MODIFICATION, or KILLED verdict.
