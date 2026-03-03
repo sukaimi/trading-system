@@ -106,6 +106,10 @@ class MarketAnalyst:
         # First pass with DeepSeek
         result = self._llm.call_deepseek(prompt, SYSTEM_PROMPT)
 
+        # DeepSeek sometimes returns a list — unwrap first element
+        if isinstance(result, list):
+            result = result[0] if result else {"error": "empty list response"}
+
         if result.get("no_trade") or result.get("error"):
             log.info("No trade for %s: %s", asset, result.get("reason", result.get("error")))
             return None
@@ -119,6 +123,8 @@ class MarketAnalyst:
         if self.should_escalate(thesis):
             log.info("Escalating %s thesis to DeepSeek (second pass)", asset)
             escalated = self._llm.call_deepseek(prompt, SYSTEM_PROMPT)
+            if isinstance(escalated, list):
+                escalated = escalated[0] if escalated else {"error": "empty list response"}
             if not escalated.get("no_trade") and not escalated.get("error"):
                 thesis = self._build_thesis(escalated, signal_alert, tech_data)
                 if thesis:
