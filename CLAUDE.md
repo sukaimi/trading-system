@@ -2,13 +2,13 @@
 
 ## Project Overview
 
-Autonomous multi-agent AI trading system for BTC, ETH, GLDM (gold), SLV (silver) using a 4-tier intelligence stack.
+Autonomous multi-agent AI trading system for BTC, ETH, GLDM (gold), SLV (silver), AAPL, NVDA, TSLA, AMZN, SPY, META using a 4-tier intelligence stack.
 
 **Owner**: Sukaimi (Code&Canvas)
 **Stack**: Python 3.12 / Direct LLM API calls / Ubuntu 24.04 VPS
 **Executor**: Alpaca (paper trading) — not IBKR
 **PRD**: `docs/TRADING_AGENT_PRD.md`
-**Dashboard**: `http://VPS_IP:8080` — Lotus creature + trading dashboard
+**Dashboard**: `https://tradebot.codeandcraft.ai` — Lotus creature + trading dashboard
 **Repo**: `https://github.com/sukaimi/trading-system`
 
 ## Architecture
@@ -17,9 +17,9 @@ Autonomous multi-agent AI trading system for BTC, ETH, GLDM (gold), SLV (silver)
 | Tier | Model | Cost | Modules |
 |------|-------|------|---------|
 | 0 | Pure Python | $0 | RiskManager, Executor, Heartbeat, Portfolio, StopLossMonitor |
-| 1 | DeepSeek V3.2 | ~$0.08/mo | NewsScout, TradeJournal |
-| 2 | Kimi K2.5 | ~$0.50/mo | MarketAnalyst (escalated), DevilsAdvocate |
-| 3 | Claude Opus 4.6 | ~$2.25/mo | WeeklyStrategist, CircuitBreaker, SelfOptimizer |
+| 1 | DeepSeek V3.2 | ~$0.08/mo | NewsScout, TradeJournal, MarketAnalyst (escalated), DevilsAdvocate |
+| 2 | Kimi K2.5 | (disabled) | — (kept as fallback, not actively used) |
+| 3 | Claude Sonnet 4.6 | ~$0.50/mo | WeeklyStrategist, CircuitBreaker, SelfOptimizer |
 
 ### Decision Flow
 ```
@@ -42,7 +42,7 @@ trading-system/
 ├── dashboard/       # FastAPI dashboard server + static files (index.html, lotus-creature.js)
 ├── config/          # Dynamic params JSON (updated weekly by SelfOptimizer)
 ├── data/            # Persisted state, trade journal, logs, weekly reviews (gitignored)
-├── tests/           # 20 test files, 265 tests (pytest)
+├── tests/           # 20 test files, 272 tests (pytest)
 ├── docs/            # PRD, Lotus spec
 ├── main.py          # Entry point — 8-task scheduler + dashboard
 └── requirements.txt
@@ -63,7 +63,7 @@ trading-system/
 ## Development Commands
 ```bash
 source venv/bin/activate
-pytest tests/ -v                        # Run all 265 tests
+pytest tests/ -v                        # Run all 272 tests
 pytest tests/test_stop_loss_monitor.py -v  # Run specific test file
 python main.py                          # Start full system (scheduler + dashboard on :8080)
 ```
@@ -71,13 +71,16 @@ python main.py                          # Start full system (scheduler + dashboa
 ## VPS Deployment
 ```
 VPS: Ubuntu 24.04 LTS
+URL: https://tradebot.codeandcraft.ai
 SSH: ssh trader@VPS_IP  (root login disabled, key-only auth)
 Services:
-  - trading-system.service — main trading system (runs as trader)
+  - trading-system.service — main trading system (runs as trader, port 8080)
+  - nginx — reverse proxy (80/443 → localhost:8080, SSL via Let's Encrypt)
   - webhook.service — GitHub auto-deploy listener on port 9000
 Auto-deploy: git push → GitHub webhook → VPS pulls + restarts
 Deploy script: /opt/deploy.sh
-Firewall (UFW): ports 22 (SSH), 8080 (dashboard), 9000 (webhook)
+SSL: Let's Encrypt, auto-renews via certbot timer
+Firewall (UFW): ports 22 (SSH), 443 (HTTPS), 9000 (webhook)
 Fail2ban: active on SSH
 ```
 
@@ -91,9 +94,10 @@ journalctl -u trading-system -f         # Live logs
 
 ## Environment Variables
 All API keys in `.env` (never committed). See `.env.example` for template.
-Required: DEEPSEEK_API_KEY, KIMI_API_KEY, ANTHROPIC_API_KEY, TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID
+Required: DEEPSEEK_API_KEY, ANTHROPIC_API_KEY, TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID
 Required: ALPACA_API_KEY, ALPACA_SECRET_KEY, ALPACA_BASE_URL, EXECUTOR_MODE
-Optional: GOOGLE_API_KEY (fallback), ALPHA_VANTAGE_API_KEY, CRYPTOCOMPARE_API_KEY
+Optional: KIMI_API_KEY (disabled), GOOGLE_API_KEY (fallback), ALPHA_VANTAGE_API_KEY, CRYPTOCOMPARE_API_KEY
+Optional: DASHBOARD_PORT (default 8080)
 
 ## Conventions
 - All inter-agent communication uses strict JSON (Pydantic v2 validated)
@@ -122,6 +126,9 @@ Optional: GOOGLE_API_KEY (fallback), ALPHA_VANTAGE_API_KEY, CRYPTOCOMPARE_API_KE
 - [ ] **Phase 6: Micro Live** — $100 SGD on Alpaca live
 - [ ] **Phase 7: Scale** — Increase capital if profitable
 - [x] Set up GitHub webhook for auto-deploy (payload URL: http://187.77.132.195:9000, secret: trading-system-deploy)
+- [x] HTTPS via nginx + Let's Encrypt on tradebot.codeandcraft.ai
+- [x] Add equity/macro RSS feeds (Yahoo Finance, MarketWatch, CNBC, Seeking Alpha, Investing.com)
+- [x] Swap Kimi→DeepSeek and Opus→Sonnet for cost savings
 
 ## Known Issues & Lessons Learned
 
@@ -159,10 +166,13 @@ Optional: GOOGLE_API_KEY (fallback), ALPHA_VANTAGE_API_KEY, CRYPTOCOMPARE_API_KE
 ### VPS Security
 - **Never run as root**: Trading system and webhook should run as a dedicated `trader` user.
 - **Disable SSH root + password**: Use key-only auth for `trader` user. Harden in `/etc/ssh/sshd_config.d/01-hardening.conf`.
-- **Always enable UFW**: Default deny incoming, allow only needed ports (22, 8080, 9000).
+- **Always enable UFW**: Default deny incoming, allow only needed ports (22, 443, 9000).
 - **Install fail2ban**: Protects SSH from brute-force attacks.
 
+### Dashboard Scheduler
+- **Countdown showed 0m 0s**: `schedule` library's `job.next_run` is a naive datetime (UTC on VPS). `isoformat()` without `Z` suffix causes JavaScript to parse as browser local time, creating timezone offset. Fixed by appending `Z` in `/api/scheduler` endpoint.
+
 ## Cost Budget
-- Paper trading: ~$3/month (all LLM APIs)
+- Paper trading: ~$1/month (DeepSeek + Sonnet, Kimi disabled)
 - VPS: ~$5/month
-- Live trading: ~$8-10/month (LLM + VPS)
+- Live trading: ~$6-8/month (LLM + VPS)
