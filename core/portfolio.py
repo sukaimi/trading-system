@@ -19,6 +19,7 @@ log = setup_logger("trading.portfolio")
 
 DATA_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "data")
 STATE_FILE = os.path.join(DATA_DIR, "portfolio_state.json")
+EQUITY_HISTORY_FILE = os.path.join(DATA_DIR, "equity_history.json")
 
 
 class PortfolioState:
@@ -129,12 +130,33 @@ class PortfolioState:
     # ── Persistence ────────────────────────────────────────────────────
 
     def persist(self) -> None:
-        """Save state to JSON file."""
+        """Save state to JSON file and append equity history snapshot."""
         os.makedirs(os.path.dirname(self.state_file), exist_ok=True)
         state = self.snapshot()
         with open(self.state_file, "w") as f:
             json.dump(state, f, indent=2)
+        self._record_equity_snapshot()
         log.info("Portfolio state persisted to %s", self.state_file)
+
+    def _record_equity_snapshot(self) -> None:
+        """Append current equity to history file (capped ring buffer)."""
+        entry = {
+            "t": datetime.utcnow().isoformat(),
+            "equity": self.equity,
+            "pnl_pct": self.daily_pnl_pct,
+        }
+        try:
+            history: list[dict[str, Any]] = []
+            if os.path.exists(EQUITY_HISTORY_FILE):
+                with open(EQUITY_HISTORY_FILE) as f:
+                    history = json.load(f)
+            history.append(entry)
+            if len(history) > 2000:
+                history = history[-2000:]
+            with open(EQUITY_HISTORY_FILE, "w") as f:
+                json.dump(history, f)
+        except Exception:
+            pass
 
     def load(self) -> bool:
         """Load state from JSON file. Returns True if loaded successfully."""

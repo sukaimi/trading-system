@@ -115,6 +115,22 @@ async def get_market() -> dict[str, Any]:
         return {}
 
 
+@app.get("/api/price-history")
+async def get_price_history() -> dict[str, Any]:
+    """Return last 24h hourly close prices for sparklines."""
+    try:
+        return await asyncio.to_thread(_fetch_price_history)
+    except Exception as e:
+        log.warning("Price history fetch failed: %s", e)
+        return {}
+
+
+@app.get("/api/equity-history")
+async def get_equity_history() -> list[Any] | dict[str, Any]:
+    """Return equity snapshots over time for the equity curve chart."""
+    return _read_json(os.path.join(DATA_DIR, "equity_history.json"), [])
+
+
 @app.get("/api/phantom")
 async def get_phantom() -> dict[str, Any]:
     return _read_json(os.path.join(DATA_DIR, "phantom_trades.json"), {
@@ -166,6 +182,25 @@ def _read_json(path: str, default: Any) -> Any:
         except (json.JSONDecodeError, OSError):
             pass
     return default
+
+
+def _fetch_price_history() -> dict[str, Any]:
+    from tools.market_data import MarketDataFetcher
+    try:
+        from core.asset_registry import get_tradeable_assets
+        symbols = get_tradeable_assets()
+    except Exception:
+        symbols = ["BTC", "ETH", "GLDM", "SLV"]
+    mdf = MarketDataFetcher()
+    result: dict[str, Any] = {}
+    for symbol in symbols:
+        try:
+            ohlcv = mdf.get_ohlcv(symbol, period="5d", interval="1h")
+            recent = ohlcv[-24:] if len(ohlcv) > 24 else ohlcv
+            result[symbol] = [bar["close"] for bar in recent]
+        except Exception:
+            result[symbol] = []
+    return result
 
 
 def _fetch_market_prices() -> dict[str, Any]:

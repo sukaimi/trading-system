@@ -34,6 +34,7 @@ data/trade_journal.json
 data/optimization_log.json
 data/circuit_breaker_log.json
 data/cost_state.json
+data/phantom_trades.json
 data/logs/*.log
 data/weekly_reviews/*.json
 
