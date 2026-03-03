@@ -35,13 +35,14 @@ For each article that contains genuinely actionable information, return a JSON o
 - "signal_strength": 0.0-1.0 (0.8-1.0=CRITICAL, 0.5-0.7=NOTABLE, 0.3-0.4=MONITOR, <0.3=NOISE)
 - "headline": max 100 chars summary
 - "sentiment": "bullish", "bearish", "neutral", or "uncertain"
-- "category": one of "central_bank", "geopolitical", "regulatory", "technical", "macro", "crypto_specific", "precious_metals"
+- "category": one of "central_bank", "geopolitical", "regulatory", "technical", "macro", "crypto_specific", "precious_metals", "equity"
 - "new_information": what NEW fact isn't priced in
 - "urgency": "critical", "high", "medium", or "low"
 - "already_priced_in": true/false
 - "confidence_in_classification": 0.0-1.0
 
 Rules:
+- IMPORTANT: We trade ALL asset classes — crypto, stocks, ETFs, gold, silver. Classify articles for ALL relevant assets, not just crypto. Earnings, guidance, analyst upgrades/downgrades, sector rotation, and company-specific news are actionable for equities.
 - If 3+ outlets report the same story, it's already priced in — set already_priced_in=true and downgrade signal_strength by 0.2
 - If article uses "could/might/may" without citing a named source, downgrade by 0.3
 - For scheduled events, only flag if actual deviates from consensus by >10%

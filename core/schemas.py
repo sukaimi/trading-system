@@ -49,6 +49,7 @@ class SignalCategory(str, Enum):
     MACRO = "macro"
     CRYPTO_SPECIFIC = "crypto_specific"
     PRECIOUS_METALS = "precious_metals"
+    EQUITY = "equity"
 
 
 class Verdict(str, Enum):
