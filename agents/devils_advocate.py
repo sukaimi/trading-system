@@ -48,7 +48,9 @@ You kill trades ONLY for structural reasons (near daily loss limit, zero confirm
 Most trades get APPROVED_WITH_MODIFICATION with adjusted size.
 During paper trading, data > protection."""
 
-CHALLENGE_PROMPT = """Challenge this trade thesis on ALL 7 dimensions.
+CHALLENGE_PROMPT = """You MUST respond with ONLY a valid JSON object. No explanation, no markdown, no text before or after the JSON.
+
+Challenge this trade thesis on ALL 7 dimensions.
 
 Thesis:
 {thesis}

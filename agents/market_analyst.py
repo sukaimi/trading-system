@@ -36,7 +36,9 @@ SYSTEM_PROMPT = """You are a Quantitative Market Analyst at Bridgewater Associat
 
 You have a strict "no thesis, no trade" policy. You require minimum 2 independent confirming signals. You explicitly quantify what could go wrong. Silence is a valid output — only propose trades when genuine edge exists."""
 
-ANALYSIS_PROMPT = """Analyze this trading signal and generate a trade thesis if warranted.
+ANALYSIS_PROMPT = """You MUST respond with ONLY a valid JSON object. No explanation, no markdown, no text before or after the JSON.
+
+Analyze this trading signal and generate a trade thesis if warranted.
 
 Signal: {signal}
 
@@ -54,16 +56,10 @@ Requirements:
 - Position sizing: 2% for 0.4-0.5 confidence, 4% for 0.5-0.65, 7% for 0.65+
 - During paper trading: we want DATA — propose trades even with modest confidence
 
-Return a JSON object with:
-- "asset", "direction" (long/short/neutral), "confidence" (0.0-1.0)
-- "thesis" (2-3 sentence rationale)
-- "confirming_signals": {{"fundamental": {{"present": bool, "description": str}}, "technical": {{"present": bool, "description": str}}, "cross_asset": {{"present": bool, "description": str}}}}
-- "entry_trigger", "invalidation_level", "time_horizon" ("1-3 days"|"1 week"|"swing")
-- "suggested_position_pct", "risk_reward_ratio"
-- "supporting_data" (key indicators)
-- "what_could_go_wrong" (list of risks)
+Respond with ONLY this JSON structure (no other text):
+{{"asset": "{asset}", "direction": "long|short|neutral", "confidence": 0.0-1.0, "thesis": "2-3 sentence rationale", "confirming_signals": {{"fundamental": {{"present": true/false, "description": "..."}}, "technical": {{"present": true/false, "description": "..."}}, "cross_asset": {{"present": true/false, "description": "..."}}}}, "entry_trigger": "...", "invalidation_level": "...", "time_horizon": "1-3 days|1 week|swing", "suggested_position_pct": 0.0, "risk_reward_ratio": "...", "supporting_data": {{}}, "what_could_go_wrong": ["..."]}}
 
-If no trade warranted (confidence < 0.4), return {{"no_trade": true, "reason": "..."}}"""
+If no trade warranted (confidence < 0.4), respond with ONLY: {{"no_trade": true, "reason": "..."}}"""
 
 
 class MarketAnalyst:
