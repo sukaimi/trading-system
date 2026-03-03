@@ -2,6 +2,7 @@
 
 import json
 import os
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -140,3 +141,77 @@ class TestPersistence:
         ps = PortfolioState(state_file=state_file)
         ps.persist()
         assert os.path.exists(state_file)
+
+
+class TestCalculateEquity:
+    def test_no_positions_returns_current_equity(self):
+        ps = PortfolioState(initial_capital=100.0)
+        mdf = MagicMock()
+        result = ps.calculate_equity(mdf)
+        assert result == 100.0
+        mdf.get_price.assert_not_called()
+
+    def test_equity_reflects_unrealized_gains(self):
+        ps = PortfolioState(initial_capital=100.0)
+        # Simulate: bought 0.001 BTC at $50,000 ($50 cost)
+        ps.add_position({
+            "trade_id": "t1", "asset": "BTC", "direction": "long",
+            "entry_price": 50000.0, "quantity": 0.001,
+        })
+        # BTC now at $60,000 → position worth $60 → gain of $10
+        mdf = MagicMock()
+        mdf.get_price.return_value = {"price": 60000.0}
+        result = ps.calculate_equity(mdf)
+        # cash = 100 - (50000 * 0.001) = 50
+        # market_value = 60000 * 0.001 = 60
+        # equity = 50 + 60 = 110
+        assert result == pytest.approx(110.0, abs=0.01)
+
+    def test_equity_reflects_unrealized_losses(self):
+        ps = PortfolioState(initial_capital=100.0)
+        ps.add_position({
+            "trade_id": "t1", "asset": "ETH", "direction": "long",
+            "entry_price": 2000.0, "quantity": 0.01,
+        })
+        # ETH dropped to $1500 → position worth $15 → loss of $5
+        mdf = MagicMock()
+        mdf.get_price.return_value = {"price": 1500.0}
+        result = ps.calculate_equity(mdf)
+        # cash = 100 - (2000 * 0.01) = 80
+        # market_value = 1500 * 0.01 = 15
+        # equity = 80 + 15 = 95
+        assert result == pytest.approx(95.0, abs=0.01)
+
+    def test_multiple_positions(self):
+        ps = PortfolioState(initial_capital=100.0)
+        ps.add_position({
+            "trade_id": "t1", "asset": "BTC", "direction": "long",
+            "entry_price": 50000.0, "quantity": 0.001,
+        })
+        ps.add_position({
+            "trade_id": "t2", "asset": "ETH", "direction": "long",
+            "entry_price": 2000.0, "quantity": 0.005,
+        })
+        mdf = MagicMock()
+        mdf.get_price.side_effect = lambda sym: (
+            {"price": 55000.0} if sym == "BTC" else {"price": 2200.0}
+        )
+        result = ps.calculate_equity(mdf)
+        # cost_basis = (50000 * 0.001) + (2000 * 0.005) = 50 + 10 = 60
+        # cash = 100 - 60 = 40
+        # market_value = (55000 * 0.001) + (2200 * 0.005) = 55 + 11 = 66
+        # equity = 40 + 66 = 106
+        assert result == pytest.approx(106.0, abs=0.01)
+
+    def test_price_fetch_failure_uses_entry_price(self):
+        ps = PortfolioState(initial_capital=100.0)
+        ps.add_position({
+            "trade_id": "t1", "asset": "BTC", "direction": "long",
+            "entry_price": 50000.0, "quantity": 0.001,
+        })
+        # Price fetch returns 0 → fallback to entry price
+        mdf = MagicMock()
+        mdf.get_price.return_value = {"price": 0.0}
+        result = ps.calculate_equity(mdf)
+        # Falls back to entry price → no change
+        assert result == pytest.approx(100.0, abs=0.01)

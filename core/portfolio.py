@@ -81,6 +81,55 @@ class PortfolioState:
             )
             self.last_updated = datetime.utcnow().isoformat()
 
+    def calculate_equity(self, market_data_fetcher: Any) -> float:
+        """Recalculate equity from cash + unrealized value of open positions.
+
+        cash_basis = current equity minus the cost basis of open positions
+        new_equity = cash_basis + sum(current_price * quantity) for each position
+        """
+        with self._lock:
+            positions = list(self.open_positions)
+            current_equity = self.equity
+
+        if not positions:
+            return current_equity
+
+        # Cost basis of open positions (what we paid to enter)
+        cost_basis = 0.0
+        for pos in positions:
+            entry_price = pos.get("entry_price", 0.0)
+            quantity = pos.get("quantity", 0.0)
+            cost_basis += entry_price * quantity
+
+        # Cash not tied up in positions
+        cash = current_equity - cost_basis
+
+        # Current market value of positions
+        market_value = 0.0
+        for pos in positions:
+            asset = pos.get("asset", "")
+            quantity = pos.get("quantity", 0.0)
+            if not asset or quantity == 0:
+                continue
+            price_data = market_data_fetcher.get_price(asset)
+            price = price_data.get("price", 0.0)
+            if price > 0:
+                market_value += price * quantity
+            else:
+                # Fallback: use entry price if current price unavailable
+                market_value += pos.get("entry_price", 0.0) * quantity
+
+        new_equity = cash + market_value
+        log.info(
+            "Equity recalculated: $%.2f (cash=$%.2f, positions=$%.4f, cost_basis=$%.4f)",
+            new_equity, cash, market_value, cost_basis,
+        )
+
+        self.update_equity(new_equity)
+        self.persist()
+        event_bus.emit("portfolio", "updated", self.snapshot())
+        return new_equity
+
     def record_trade(self, pnl: float) -> None:
         """Record a completed trade and update stats."""
         with self._lock:

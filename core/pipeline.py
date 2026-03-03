@@ -607,6 +607,16 @@ class TradingPipeline:
 
         return closed
 
+    def recalculate_equity(self) -> None:
+        """Recalculate portfolio equity using live market prices."""
+        if self._portfolio.halted:
+            return
+        try:
+            mdf = MarketDataFetcher()
+            self._portfolio.calculate_equity(mdf)
+        except Exception as e:
+            log.error("Equity recalculation failed: %s", e)
+
     def run_circuit_breaker_check(self, market_data: dict[str, Any] | None = None) -> None:
         """Run circuit breaker check against current portfolio state."""
         if self._portfolio.halted:

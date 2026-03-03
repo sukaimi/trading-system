@@ -126,6 +126,8 @@ def main():
         # Run stop-loss + take-profit checks (Tier 0 — deterministic, every 5 min)
         pipeline.check_stop_losses()
         pipeline.check_take_profits()
+        # Recalculate equity with live market prices
+        pipeline.recalculate_equity()
         # Run circuit breaker check alongside heartbeat
         pipeline.run_circuit_breaker_check()
 

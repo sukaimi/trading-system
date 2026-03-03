@@ -1475,18 +1475,34 @@ function renderJournal() {
   }
 
   body.innerHTML = entries.slice(-50).reverse().map(e => {
-    const outcome = e.outcome || e.type || 'unknown';
-    const outcomeClass = outcome.includes('execute') ? 'executed'
-      : outcome.includes('kill') ? 'killed'
-      : outcome.includes('reject') ? 'risk_rejected'
+    // Determine outcome string: type is a string for no_trade/killed_trade,
+    // outcome is a dict from JournalEntry, trade_id means open trade
+    let outcomeStr;
+    if (typeof e.type === 'string') {
+      outcomeStr = e.type;
+    } else if (e.outcome && typeof e.outcome === 'object' && e.outcome.exit_reason) {
+      outcomeStr = e.outcome.exit_reason;
+    } else if (e.trade_id) {
+      outcomeStr = 'open';
+    } else {
+      outcomeStr = 'unknown';
+    }
+    const outcomeClass = outcomeStr.includes('open') ? 'executed'
+      : outcomeStr.includes('kill') ? 'killed'
+      : outcomeStr.includes('stop') ? 'killed'
+      : outcomeStr.includes('no_trade') ? 'no_trade'
       : 'no_trade';
+    // Show P&L if available
+    const pnl = e.outcome && typeof e.outcome === 'object' && e.outcome.pnl_usd != null
+      ? (e.outcome.pnl_usd >= 0 ? '+' : '') + '$' + Number(e.outcome.pnl_usd).toFixed(2)
+      : '';
     return `<tr>
       <td>${fmtTime(e.timestamp_open || e.timestamp || '')}</td>
       <td style="color:var(--blue);font-weight:600">${esc(e.asset || '')}</td>
       <td>${esc(e.direction || '')}</td>
       <td style="max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${esc(e.thesis_summary || e.thesis || '')}">${esc((e.thesis_summary || e.thesis || '').slice(0, 60))}</td>
       <td>${esc(e.verdict || '')}</td>
-      <td><span class="outcome-badge outcome-${outcomeClass}">${esc(outcome)}</span></td>
+      <td><span class="outcome-badge outcome-${outcomeClass}">${esc(outcomeStr)}</span>${pnl ? ' <span style="font-size:10px">' + pnl + '</span>' : ''}</td>
       <td>${e.entry_price ? '$' + fmtPrice(e.entry_price) : '--'}</td>
     </tr>`;
   }).join('');
