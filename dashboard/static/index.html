@@ -383,6 +383,35 @@ body::after {
   100% { transform: translateX(100%); }
 }
 
+/* Parallel phase group */
+.pipe-parallel {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  position: relative;
+  padding: 8px 6px;
+  border: 1px dashed rgba(88,166,255,0.3);
+  border-radius: 10px;
+  background: rgba(88,166,255,0.04);
+}
+.pipe-parallel-label {
+  font-size: 8px;
+  text-transform: uppercase;
+  letter-spacing: 0.8px;
+  color: var(--blue);
+  opacity: 0.7;
+  position: absolute;
+  top: -8px;
+  background: var(--bg);
+  padding: 0 6px;
+}
+.pipe-parallel-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
 .pipe-status {
   text-align: center;
   font-size: 11px;
@@ -709,11 +738,14 @@ body::after {
     <div class="pipeline-flow" id="pipeline-flow">
       <div class="pipe-node" id="pipe-news"><div class="pipe-icon">📰</div><div class="pipe-label">News</div></div>
       <div class="pipe-connector" id="pipe-conn-1"></div>
-      <div class="pipe-node" id="pipe-analyst"><div class="pipe-icon">🔍</div><div class="pipe-label">Analyst</div></div>
-      <div class="pipe-connector" id="pipe-conn-2"></div>
-      <div class="pipe-node" id="pipe-chart"><div class="pipe-icon">📊</div><div class="pipe-label">Chart</div></div>
-      <div class="pipe-connector" id="pipe-conn-3"></div>
-      <div class="pipe-node" id="pipe-devil"><div class="pipe-icon">😈</div><div class="pipe-label">Devil</div></div>
+      <div class="pipe-parallel">
+        <div class="pipe-parallel-label">parallel</div>
+        <div class="pipe-parallel-row">
+          <div class="pipe-node" id="pipe-analyst"><div class="pipe-icon">🔍</div><div class="pipe-label">Analyst</div></div>
+          <div class="pipe-node" id="pipe-chart"><div class="pipe-icon">📊</div><div class="pipe-label">Chart</div></div>
+          <div class="pipe-node" id="pipe-devil"><div class="pipe-icon">😈</div><div class="pipe-label">Devil</div></div>
+        </div>
+      </div>
       <div class="pipe-connector" id="pipe-conn-4"></div>
       <div class="pipe-node" id="pipe-risk"><div class="pipe-icon">🛡️</div><div class="pipe-label">Risk</div></div>
       <div class="pipe-connector" id="pipe-conn-5"></div>
@@ -1262,8 +1294,9 @@ function updatePipelineFlow(event) {
 
 function renderPipelineFlow() {
   const flow = state.pipelineFlow;
+  const parallelStages = ['analyst', 'chart', 'devil'];
 
-  PIPELINE_STAGES.forEach((stage, i) => {
+  PIPELINE_STAGES.forEach((stage) => {
     const node = document.getElementById('pipe-' + stage);
     if (!node) return;
 
@@ -1274,25 +1307,47 @@ function renderPipelineFlow() {
     } else if (flow.active && flow.currentStage === stage) {
       node.classList.add('active');
     }
-
-    // Connectors (5 between 6 nodes)
-    if (i > 0) {
-      const conn = document.getElementById('pipe-conn-' + i);
-      if (conn) {
-        conn.classList.remove('passed', 'killed', 'flowing');
-        const prevResult = flow.stageResults[PIPELINE_STAGES[i - 1]];
-        if (prevResult === 'passed' || prevResult === 'modified') {
-          conn.classList.add('passed');
-        }
-        if (prevResult === 'killed') {
-          conn.classList.add('killed');
-        }
-        if (flow.active && flow.currentStage === stage && (prevResult === 'passed' || prevResult === 'modified')) {
-          conn.classList.add('flowing');
-        }
-      }
+    // For parallel stages, show active if any parallel stage is current
+    if (!result && flow.active && parallelStages.includes(stage) && parallelStages.includes(flow.currentStage)) {
+      node.classList.add('active');
     }
   });
+
+  // Connector 1: news → parallel group
+  const conn1 = document.getElementById('pipe-conn-1');
+  if (conn1) {
+    conn1.classList.remove('passed', 'killed', 'flowing');
+    const newsResult = flow.stageResults.news;
+    if (newsResult === 'passed') conn1.classList.add('passed');
+    if (newsResult === 'killed') conn1.classList.add('killed');
+    if (flow.active && parallelStages.includes(flow.currentStage) && newsResult === 'passed') {
+      conn1.classList.add('flowing');
+    }
+  }
+
+  // Connector 4: parallel group → risk
+  const conn4 = document.getElementById('pipe-conn-4');
+  if (conn4) {
+    conn4.classList.remove('passed', 'killed', 'flowing');
+    const devilResult = flow.stageResults.devil;
+    if (devilResult === 'passed' || devilResult === 'modified') conn4.classList.add('passed');
+    if (devilResult === 'killed') conn4.classList.add('killed');
+    if (flow.active && flow.currentStage === 'risk' && (devilResult === 'passed' || devilResult === 'modified')) {
+      conn4.classList.add('flowing');
+    }
+  }
+
+  // Connector 5: risk → execute
+  const conn5 = document.getElementById('pipe-conn-5');
+  if (conn5) {
+    conn5.classList.remove('passed', 'killed', 'flowing');
+    const riskResult = flow.stageResults.risk;
+    if (riskResult === 'passed') conn5.classList.add('passed');
+    if (riskResult === 'killed') conn5.classList.add('killed');
+    if (flow.active && flow.currentStage === 'execute' && riskResult === 'passed') {
+      conn5.classList.add('flowing');
+    }
+  }
 
   // Status text
   const statusEl = document.getElementById('pipe-status');
@@ -1301,7 +1356,8 @@ function renderPipelineFlow() {
       statusEl.textContent = 'Idle \u2014 waiting for signals';
       statusEl.style.color = 'var(--text-dim)';
     } else if (flow.active) {
-      statusEl.textContent = 'Processing ' + (flow.currentAsset || '...') + ' \u2014 ' + (flow.currentStage || 'starting');
+      const stageLabel = parallelStages.includes(flow.currentStage) ? 'analysis (parallel)' : (flow.currentStage || 'starting');
+      statusEl.textContent = 'Processing ' + (flow.currentAsset || '...') + ' \u2014 ' + stageLabel;
       statusEl.style.color = 'var(--yellow)';
     } else {
       const lastResult = flow.stageResults[flow.currentStage] || '';
