@@ -42,7 +42,7 @@ trading-system/
 ├── dashboard/       # FastAPI dashboard server + static files (index.html, lotus-creature.js)
 ├── config/          # Dynamic params JSON (updated weekly by SelfOptimizer)
 ├── data/            # Persisted state, trade journal, logs, weekly reviews (gitignored)
-├── tests/           # 19 test files, 224 tests (pytest)
+├── tests/           # 20 test files, 265 tests (pytest)
 ├── docs/            # PRD, Lotus spec
 ├── main.py          # Entry point — 8-task scheduler + dashboard
 └── requirements.txt
@@ -52,7 +52,7 @@ trading-system/
 - `main.py` — Entry point, scheduler, executor selection (paper/alpaca/ibkr)
 - `core/pipeline.py` — Signal-to-execution orchestration + `check_stop_losses()`
 - `core/alpaca_executor.py` — Alpaca paper/live trading executor
-- `core/cost_tracker.py` — LLM cost tracking with JSON persistence (`data/cost_state.json`)
+- `core/cost_tracker.py` — LLM cost tracking with JSON persistence + daily budget limits (`check_budget()`)
 - `core/event_bus.py` — Real-time pub/sub for dashboard WebSocket
 - `core/portfolio.py` — Thread-safe portfolio state with JSON persistence
 - `dashboard/server.py` — FastAPI server (REST + WebSocket)
@@ -63,7 +63,7 @@ trading-system/
 ## Development Commands
 ```bash
 source venv/bin/activate
-pytest tests/ -v                        # Run all 224 tests
+pytest tests/ -v                        # Run all 265 tests
 pytest tests/test_stop_loss_monitor.py -v  # Run specific test file
 python main.py                          # Start full system (scheduler + dashboard on :8080)
 ```
@@ -150,6 +150,11 @@ Optional: GOOGLE_API_KEY (fallback), ALPHA_VANTAGE_API_KEY, CRYPTOCOMPARE_API_KE
 ### Cost Tracking
 - **CostTracker was in-memory only**: Costs reset on every restart. Fixed by adding JSON persistence to `data/cost_state.json`. Now survives restarts.
 - **Standalone dashboard loses costs**: Starting dashboard independently (not through `main.py`) means `_cost_tracker` is None. Always run via `main.py`.
+- **Circuit breaker burned $0.44 in 2 days**: No cooldown/dedup on `escalate_to_opus()` — every 5-min heartbeat re-fired identical Opus calls at $0.04 each when stale portfolio data persisted. Fixed with 4 guards:
+  - Pipeline: `run_circuit_breaker_check()` skips entirely when `portfolio.halted` is True
+  - Circuit breaker: 1-hour cooldown + trigger dedup on Opus calls (cached decision reuse)
+  - Pre-flight: minimal `max_tokens=5` ping instead of full JSON prompt
+  - CostTracker: `check_budget()` with daily per-provider limits ($0.15/day Anthropic hard cap), enforced in `LLMClient.call_anthropic()` before every API call
 
 ### VPS Security
 - **Never run as root**: Trading system and webhook should run as a dedicated `trader` user.
