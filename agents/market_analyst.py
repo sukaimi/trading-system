@@ -115,14 +115,14 @@ class MarketAnalyst:
         if thesis is None:
             return None
 
-        # Check escalation to Kimi
+        # Check escalation (was Kimi, now DeepSeek for cost savings)
         if self.should_escalate(thesis):
-            log.info("Escalating %s thesis to Kimi K2.5", asset)
-            escalated = self._llm.call_kimi(prompt, SYSTEM_PROMPT)
+            log.info("Escalating %s thesis to DeepSeek (second pass)", asset)
+            escalated = self._llm.call_deepseek(prompt, SYSTEM_PROMPT)
             if not escalated.get("no_trade") and not escalated.get("error"):
                 thesis = self._build_thesis(escalated, signal_alert, tech_data)
                 if thesis:
-                    thesis.model_used = "kimi"
+                    thesis.model_used = "deepseek"
                     thesis.escalated = True
 
         # Check minimum confidence

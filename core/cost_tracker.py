@@ -19,7 +19,7 @@ from core.event_bus import event_bus
 PRICING: dict[str, dict[str, float]] = {
     "deepseek": {"input": 0.14, "output": 0.28},
     "kimi": {"input": 0.50, "output": 1.00},
-    "anthropic": {"input": 15.00, "output": 75.00},
+    "anthropic": {"input": 3.00, "output": 15.00},
     "gemini": {"input": 0.075, "output": 0.30},
 }
 

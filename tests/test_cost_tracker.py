@@ -19,12 +19,10 @@ class TestCheckBudget:
 
     def test_over_limit_returns_false(self, tracker):
         # Record enough calls to exceed $0.15 daily limit for anthropic
-        # Anthropic pricing: $15/M input + $75/M output
-        # A ~2700 char input + ~2700 char output ≈ 675 tokens each
-        # Cost ≈ 675*15/1M + 675*75/1M ≈ $0.06
-        # Need 3 calls to exceed $0.15
-        for _ in range(5):
-            tracker.record("anthropic", "test", "x" * 3000, "y" * 3000)
+        # Sonnet pricing: $3/M input + $15/M output
+        # Need many calls with large payloads to exceed $0.15
+        for _ in range(20):
+            tracker.record("anthropic", "test", "x" * 5000, "y" * 5000)
 
         assert tracker.check_budget("anthropic") is False
 

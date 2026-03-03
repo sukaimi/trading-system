@@ -118,15 +118,15 @@ class DevilsAdvocate:
                 final_reasoning=f"Fatal flaws: {'; '.join(fatal_flaws)}",
             )
 
-        # Step 2: Send to Kimi for 7-challenge analysis
+        # Step 2: Send to DeepSeek for 7-challenge analysis (was Kimi, swapped for cost)
         prompt = CHALLENGE_PROMPT.format(
             thesis=json.dumps(trade_thesis.model_dump(), default=str),
             portfolio_state=json.dumps(portfolio_state, default=str),
         )
-        result = self._llm.call_kimi(prompt, SYSTEM_PROMPT)
+        result = self._llm.call_deepseek(prompt, SYSTEM_PROMPT)
 
         if result.get("error"):
-            log.warning("Kimi challenge failed: %s — defaulting to APPROVED_WITH_MODIFICATION", result["error"])
+            log.warning("DeepSeek challenge failed: %s — defaulting to APPROVED_WITH_MODIFICATION", result["error"])
             return DevilsVerdict(
                 original_thesis_id=thesis_id,
                 verdict=Verdict.APPROVED_WITH_MODIFICATION,

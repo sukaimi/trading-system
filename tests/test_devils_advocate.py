@@ -149,13 +149,13 @@ class TestDetermineVerdict:
     def test_two_flags_modified(self, devil):
         assert devil._determine_verdict(2, []) == Verdict.APPROVED_WITH_MODIFICATION
 
-    def test_six_flags_killed(self, devil):
-        # Kill threshold is now 6 (raised from 4)
-        assert devil._determine_verdict(6, []) == Verdict.KILLED
+    def test_three_flags_killed(self, devil):
+        # Kill threshold is now 3 (lowered for paper trading data collection)
+        assert devil._determine_verdict(3, []) == Verdict.KILLED
 
-    def test_four_flags_modified(self, devil):
-        # 4 flags is now APPROVED_WITH_MODIFICATION (was KILLED at threshold 4)
-        assert devil._determine_verdict(4, []) == Verdict.APPROVED_WITH_MODIFICATION
+    def test_four_flags_killed(self, devil):
+        # 4 flags exceeds kill threshold of 3
+        assert devil._determine_verdict(4, []) == Verdict.KILLED
 
     def test_fatal_flaws_killed(self, devil):
         assert devil._determine_verdict(0, ["fatal"]) == Verdict.KILLED

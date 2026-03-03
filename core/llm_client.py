@@ -33,7 +33,7 @@ PROVIDERS = {
     },
     "anthropic": {
         "base_url": "https://api.anthropic.com/v1",
-        "model": "claude-opus-4-6",
+        "model": "claude-sonnet-4-6",
         "env_key": "ANTHROPIC_API_KEY",
     },
     "gemini": {
