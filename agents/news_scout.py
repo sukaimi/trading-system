@@ -15,7 +15,7 @@ from typing import Any
 
 from core.llm_client import LLMClient
 from core.logger import setup_logger
-from core.asset_registry import get_tradeable_assets
+from core.asset_registry import get_registry, get_tradeable_assets
 from core.schemas import Sentiment, SignalAlert, SignalCategory, Urgency
 from tools.news_fetcher import NewsFetcher
 
@@ -40,6 +40,15 @@ For each article that contains genuinely actionable information, return a JSON o
 - "urgency": "critical", "high", "medium", or "low"
 - "already_priced_in": true/false
 - "confidence_in_classification": 0.0-1.0
+
+Ticker mapping rules:
+- Company-specific news (earnings, guidance, analyst upgrades/downgrades) → map to the specific ticker: AAPL, NVDA, TSLA, AMZN, or META
+- Fed, interest rate, broad market, index, or S&P 500 news → SPY
+- Gold, precious metals, gold ETF news → GLDM
+- Silver news → SLV
+- Bitcoin, BTC news → BTC
+- Ethereum, ETH news → ETH
+- Cross-market or unclear → MACRO
 
 Rules:
 - IMPORTANT: We trade ALL asset classes — crypto, stocks, ETFs, gold, silver. Classify articles for ALL relevant assets, not just crypto. Earnings, guidance, analyst upgrades/downgrades, sector rotation, and company-specific news are actionable for equities.
@@ -109,13 +118,27 @@ class NewsScout:
 
         return []
 
+    def _get_asset_class(self, asset: str) -> str:
+        """Look up asset class from the asset registry. Returns 'MACRO' for unknown."""
+        if asset == "MACRO":
+            return "MACRO"
+        registry = get_registry()
+        config = registry.get_config(asset)
+        return config.get("type", "MACRO")
+
     def _apply_filters(self, raw_signals: list[dict[str, Any]]) -> list[SignalAlert]:
         """Apply anti-noise rules and create SignalAlert objects."""
         now = datetime.utcnow()
         is_weekend = now.weekday() >= 5
         min_threshold = self._params.get("min_signal_threshold", 0.4)
-        max_per_hour = self._params.get("max_alerts_per_hour", 5)
+        max_per_hour = self._params.get("max_alerts_per_hour", 7)
         weekend_penalty = self._params.get("weekend_signal_penalty", 0.15)
+
+        # Per-class quotas
+        per_class_quotas = self._params.get("per_class_quotas", {
+            "crypto": 2, "stock": 3, "etf": 2, "MACRO": 1,
+        })
+        class_counters: dict[str, int] = {}
 
         # Clean up hourly counter
         cutoff = now.timestamp() - 3600
@@ -154,15 +177,25 @@ class NewsScout:
             if headline_lower in self._recent_headlines:
                 continue
 
-            # Max alerts per hour
+            # Total alerts per hour cap
             if len(self._alerts_this_hour) >= max_per_hour:
                 log.warning("Max alerts per hour reached (%d)", max_per_hour)
                 break
 
+            # Per-class quota check — skip signal if class quota full, continue to next
+            asset = sig.get("asset", "MACRO")
+            asset_class = self._get_asset_class(asset)
+            class_limit = per_class_quotas.get(asset_class, max_per_hour)
+            current_count = class_counters.get(asset_class, 0)
+            if current_count >= class_limit:
+                log.info("Per-class quota full for %s (%d/%d) — skipping %s",
+                         asset_class, current_count, class_limit, headline[:60])
+                continue
+
             # Build SignalAlert
             try:
                 alert = SignalAlert(
-                    asset=sig.get("asset", "MACRO"),
+                    asset=asset,
                     signal_strength=strength,
                     headline=headline[:100],
                     sentiment=Sentiment(sig.get("sentiment", "neutral")),
@@ -178,6 +211,7 @@ class NewsScout:
                 alerts.append(alert)
                 self._recent_headlines.append(headline_lower)
                 self._alerts_this_hour.append(now.timestamp())
+                class_counters[asset_class] = current_count + 1
             except (ValueError, KeyError) as e:
                 log.warning("Skipping invalid signal: %s", e)
 

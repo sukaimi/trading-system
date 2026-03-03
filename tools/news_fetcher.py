@@ -1,6 +1,6 @@
 """News fetching tools — RSS feeds and news APIs.
 
-Sources: CoinDesk RSS, Kitco RSS, Yahoo Finance, MarketWatch,
+Sources: CoinDesk RSS, Yahoo Finance, MarketWatch,
 CNBC, Seeking Alpha, Investing.com, Alpha Vantage News API,
 CryptoCompare News API.
 All methods return standardized article dicts, never raise.
@@ -23,8 +23,7 @@ log = setup_logger("trading.news_fetcher")
 RSS_FEEDS = {
     # Crypto
     "coindesk": "https://www.coindesk.com/arc/outboundfeeds/rss/",
-    "kitco": "https://www.kitco.com/feed/",
-    # Equities & macro
+    # Equities & macro (also covers gold/silver/precious metals)
     "yahoo_finance": "https://finance.yahoo.com/news/rssindex",
     "marketwatch": "https://feeds.marketwatch.com/marketwatch/topstories/",
     "cnbc": "https://search.cnbc.com/rs/search/combinedcms/view.xml?partnerId=wrss01&id=100003114",

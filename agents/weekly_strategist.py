@@ -1,4 +1,4 @@
-"""Weekly Strategist Agent — Tier 3 (Claude Opus 4.6).
+"""Weekly Strategist Agent — Tier 3 (Claude Sonnet 4.6).
 
 Conducts comprehensive weekly review of all trading activity.
 Identifies patterns, assesses strategy performance, and produces
@@ -125,11 +125,11 @@ class WeeklyStrategist:
             week_ending=week_ending,
         )
 
-        # Call Opus
+        # Call Sonnet
         result = self._llm.call_anthropic(prompt, SYSTEM_PROMPT)
 
         if result.get("error"):
-            log.warning("Opus review failed: %s — producing empty directive", result["error"])
+            log.warning("Sonnet review failed: %s — producing empty directive", result["error"])
             directive = WeeklyDirective(
                 week_reviewed=week_ending,
                 assessment={"overall": f"Review failed: {result['error']}"},
@@ -212,7 +212,7 @@ class WeeklyStrategist:
             log.warning("Failed to parse directive: %s", e)
             return WeeklyDirective(
                 week_reviewed=week_ending,
-                assessment={"overall": "Failed to parse Opus response"},
+                assessment={"overall": "Failed to parse Sonnet response"},
             )
 
     def _save_directive(self, directive: WeeklyDirective, week_ending: str) -> None:

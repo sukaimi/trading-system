@@ -1,7 +1,7 @@
-"""Circuit Breaker Agent — Tier 3 (Claude Opus 4.6).
+"""Circuit Breaker Agent — Tier 3 (Claude Sonnet 4.6).
 
 Emergency decision-making when the system hits critical thresholds.
-Python monitors triggers; Opus makes the crisis decision.
+Python monitors triggers; Sonnet makes the crisis decision.
 
 Triggers: daily loss > 5%, drawdown > 15%, 5 consecutive losses,
 VIX > 35, flash crash > 10%/hr, 3 API failures.
@@ -83,9 +83,9 @@ Make your decision. Return JSON:
 
 
 class CircuitBreakerAgent:
-    """Emergency circuit breaker — Python triggers + Opus crisis decision."""
+    """Emergency circuit breaker — Python triggers + Sonnet crisis decision."""
 
-    COOLDOWN_SECONDS = 3600  # 1 hour between Opus calls for same triggers
+    COOLDOWN_SECONDS = 3600  # 1 hour between Sonnet calls for same triggers
 
     def __init__(
         self,
@@ -122,7 +122,7 @@ class CircuitBreakerAgent:
             triggered.append("api_failures")
 
         if triggered:
-            return {"triggers_fired": triggered, "action": "ESCALATE_TO_OPUS"}
+            return {"triggers_fired": triggered, "action": "ESCALATE_TO_LLM"}
 
         return None
 
@@ -132,7 +132,7 @@ class CircuitBreakerAgent:
         portfolio_state: dict[str, Any],
         market_data: dict[str, Any],
     ) -> CircuitBreakerDecision:
-        """Escalate to Opus for crisis decision."""
+        """Escalate to Sonnet for crisis decision."""
         now = time.time()
 
         # Cooldown + dedup: same triggers within 1 hour → return cached decision
@@ -155,7 +155,7 @@ class CircuitBreakerAgent:
             except Exception as e:
                 log.error("Failed to persist halted state: %s", e)
 
-        log.warning("CIRCUIT BREAKER — escalating to Opus: %s", triggered)
+        log.warning("CIRCUIT BREAKER — escalating to Sonnet: %s", triggered)
 
         # Build open positions summary
         open_positions = portfolio_state.get("open_positions", [])
@@ -173,13 +173,13 @@ class CircuitBreakerAgent:
         result = self._llm.call_anthropic(prompt, SYSTEM_PROMPT)
 
         if result.get("error"):
-            log.error("Opus crisis call failed: %s — defaulting to HOLD", result["error"])
+            log.error("Sonnet crisis call failed: %s — defaulting to HOLD", result["error"])
             decision = CircuitBreakerDecision(
                 triggers_fired=triggered,
                 decision=CircuitBreakerAction.HOLD,
-                reasoning=f"Opus unavailable: {result['error']}. Defaulting to HOLD.",
-                resume_conditions="Manual review required — Opus was unreachable",
-                telegram_message=f"CIRCUIT BREAKER: {', '.join(triggered)}. Opus unreachable — HOLD. Manual review needed.",
+                reasoning=f"Sonnet unavailable: {result['error']}. Defaulting to HOLD.",
+                resume_conditions="Manual review required — Sonnet was unreachable",
+                telegram_message=f"CIRCUIT BREAKER: {', '.join(triggered)}. Sonnet unreachable — HOLD. Manual review needed.",
             )
         else:
             decision = self._parse_decision(result, triggered)

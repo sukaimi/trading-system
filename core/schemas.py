@@ -321,7 +321,7 @@ class WeeklyDirective(BaseModel):
     type: str = "weekly_strategy_directive"
     timestamp: datetime = Field(default_factory=datetime.utcnow)
     source: str = "weekly_strategist"
-    model: str = "opus-4.6"
+    model: str = "sonnet-4.6"
     week_reviewed: str
     assessment: dict = Field(default_factory=dict)
     parameter_changes: list[ParameterChange] = Field(default_factory=list)
@@ -335,7 +335,7 @@ class CircuitBreakerDecision(BaseModel):
     type: str = "circuit_breaker_decision"
     timestamp: datetime = Field(default_factory=datetime.utcnow)
     source: str = "circuit_breaker"
-    model: str = "opus-4.6"
+    model: str = "sonnet-4.6"
     triggers_fired: list[str] = Field(default_factory=list)
     decision: CircuitBreakerAction
     positions_to_close: list[str] = Field(default_factory=list)

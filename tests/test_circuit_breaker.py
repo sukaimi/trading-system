@@ -114,7 +114,7 @@ class TestCheck:
         assert len(result["triggers_fired"]) >= 3
 
 
-class TestEscalateToOpus:
+class TestEscalateToLLM:
     def test_halts_portfolio(self, cb, crisis_state, mock_portfolio):
         decision = cb.escalate_to_opus(["daily_loss_limit"], crisis_state, {})
         assert mock_portfolio.halted is True
@@ -124,7 +124,7 @@ class TestEscalateToOpus:
         assert isinstance(decision, CircuitBreakerDecision)
         assert decision.decision in list(CircuitBreakerAction)
 
-    def test_handles_opus_error(self, cb, crisis_state):
+    def test_handles_sonnet_error(self, cb, crisis_state):
         with patch.object(LLMClient, "call_anthropic") as mock_call:
             mock_call.return_value = {"error": "timeout"}
             cb._llm = LLMClient(mock_mode=False)

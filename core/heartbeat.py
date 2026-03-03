@@ -37,7 +37,8 @@ class Heartbeat:
 
         # 2. API connectivity
         checks["deepseek"] = self._ping_api("https://api.deepseek.com/v1/models")
-        checks["kimi"] = self._ping_api("https://api.moonshot.ai/v1/models")
+        # Kimi disabled — no agents use it currently
+        # checks["kimi"] = self._ping_api("https://api.moonshot.ai/v1/models")
 
         # 3. IBKR (skip in paper mode)
         if not self.skip_ibkr:

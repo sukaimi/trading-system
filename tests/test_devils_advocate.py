@@ -81,10 +81,16 @@ class TestCheckFatalFlaws:
         flaws = devil.check_fatal_flaws(valid_thesis, healthy_portfolio)
         assert any("daily loss" in f.lower() for f in flaws)
 
-    def test_duplicate_asset(self, devil, valid_thesis, healthy_portfolio):
+    def test_duplicate_asset_not_fatal(self, devil, valid_thesis, healthy_portfolio):
+        """Duplicate asset is no longer a fatal flaw — it should be a warning instead."""
         healthy_portfolio["open_positions"] = [{"asset": "BTC"}]
         flaws = devil.check_fatal_flaws(valid_thesis, healthy_portfolio)
-        assert any("duplicate" in f.lower() or "BTC" in f for f in flaws)
+        # No fatal flaw for duplicate asset
+        assert not any("duplicate" in f.lower() for f in flaws)
+        # But warning is returned by the separate method
+        warning = devil._duplicate_asset_warning(valid_thesis, healthy_portfolio)
+        assert warning is not None
+        assert "BTC" in warning
 
     def test_no_invalidation(self, devil, healthy_portfolio):
         thesis = TradeThesis(
@@ -133,7 +139,7 @@ class TestChallenge:
         assert verdict.verdict in (Verdict.APPROVED, Verdict.APPROVED_WITH_MODIFICATION, Verdict.KILLED)
 
     def test_approved_valid_thesis(self, devil, valid_thesis, healthy_portfolio):
-        # In mock mode, Kimi returns a generic mock → challenges parse with defaults → 0 flags → APPROVED
+        # In mock mode, DeepSeek returns a generic mock → challenges parse with defaults → 0 flags → APPROVED
         verdict = devil.challenge(valid_thesis, healthy_portfolio)
         # Could be APPROVED or APPROVED_WITH_MODIFICATION depending on mock
         assert verdict.verdict != Verdict.KILLED or len(verdict.fatal_flaws) > 0

@@ -23,7 +23,7 @@ VERSION_FILE = os.path.join(CONFIG_DIR, "strategy_version.json")
 
 
 class SelfOptimizer:
-    """Translates Opus strategy directives into actual config changes."""
+    """Translates Sonnet strategy directives into actual config changes."""
 
     def __init__(
         self,

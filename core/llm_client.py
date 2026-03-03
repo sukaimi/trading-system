@@ -1,6 +1,6 @@
-"""Unified LLM client for DeepSeek, Kimi, and Anthropic.
+"""Unified LLM client for DeepSeek and Anthropic.
 
-DeepSeek and Kimi both use OpenAI-compatible chat completion APIs.
+DeepSeek uses OpenAI-compatible chat completion APIs.
 Anthropic uses its own Messages API format.
 When API keys are not set, returns mock responses for testing.
 Fallback chain: DeepSeek -> Gemini Flash -> retry.

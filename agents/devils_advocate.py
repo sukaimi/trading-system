@@ -44,7 +44,7 @@ Your methodology:
 5. FIND SECOND-ORDER EFFECTS — flag but don't auto-kill
 
 Three outputs: APPROVED | APPROVED_WITH_MODIFICATION | KILLED
-You kill trades ONLY for structural reasons (duplicate asset, near daily loss limit).
+You kill trades ONLY for structural reasons (near daily loss limit, zero confirming signals, no invalidation level).
 Most trades get APPROVED_WITH_MODIFICATION with adjusted size.
 During paper trading, data > protection."""
 
@@ -118,6 +118,9 @@ class DevilsAdvocate:
                 final_reasoning=f"Fatal flaws: {'; '.join(fatal_flaws)}",
             )
 
+        # Check for duplicate asset warning (non-fatal)
+        dup_warning = self._duplicate_asset_warning(trade_thesis, portfolio_state)
+
         # Step 2: Send to DeepSeek for 7-challenge analysis (was Kimi, swapped for cost)
         prompt = CHALLENGE_PROMPT.format(
             thesis=json.dumps(trade_thesis.model_dump(), default=str),
@@ -145,6 +148,11 @@ class DevilsAdvocate:
         # Step 5: Determine verdict — prefer downsizing over killing
         confidence_adjusted = float(result.get("confidence_adjusted", trade_thesis.confidence * 0.9))
         modifications = result.get("modifications", [])
+
+        # Inject duplicate-asset warning as a modification, not a fatal flaw
+        if dup_warning:
+            modifications.append(dup_warning)
+            log.info("Duplicate asset warning: %s", dup_warning)
 
         kill_threshold = self._params.get("kill_thresholds", {}).get(
             "min_challenges_for_kill", 6
@@ -180,7 +188,12 @@ class DevilsAdvocate:
     def check_fatal_flaws(
         self, thesis: TradeThesis, portfolio_state: dict[str, Any]
     ) -> list[str]:
-        """Check for auto-kill fatal flaws (pure Python)."""
+        """Check for auto-kill fatal flaws (pure Python).
+
+        Note: duplicate asset is NOT a fatal flaw — the signal could be
+        an exit or reversal for a held position. It is tracked as a
+        warning flag instead (see ``_duplicate_asset_warning``).
+        """
         flaws: list[str] = []
 
         # 1. Position would breach daily loss limit
@@ -188,18 +201,11 @@ class DevilsAdvocate:
         if daily_pnl <= -4.0:  # Within 1% of 5% limit
             flaws.append("Position would risk breaching daily loss limit")
 
-        # 2. Trade adds >50% correlation to existing positions
-        existing = portfolio_state.get("open_positions", [])
-        for pos in existing:
-            if pos.get("asset") == thesis.asset:
-                flaws.append(f"Duplicate asset {thesis.asset} already in portfolio")
-                break
-
-        # 3. No invalidation level defined
+        # 2. No invalidation level defined
         if not thesis.invalidation_level:
             flaws.append("No invalidation level defined")
 
-        # 4. Thesis has zero confirming signals (out of 4: fundamental, technical, cross_asset, chart_pattern)
+        # 3. Thesis has zero confirming signals (out of 4: fundamental, technical, cross_asset, chart_pattern)
         signals = thesis.confirming_signals
         confirmed_count = sum([
             signals.fundamental.present,
@@ -211,6 +217,20 @@ class DevilsAdvocate:
             flaws.append("Zero confirming signals")
 
         return flaws
+
+    def _duplicate_asset_warning(
+        self, thesis: TradeThesis, portfolio_state: dict[str, Any]
+    ) -> str | None:
+        """Return a warning string if the asset already has an open position.
+
+        This is intentionally NOT a fatal flaw — the signal could be an
+        exit or reversal for the held position.
+        """
+        existing = portfolio_state.get("open_positions", [])
+        for pos in existing:
+            if pos.get("asset") == thesis.asset:
+                return f"Duplicate asset {thesis.asset} already in portfolio — review for exit/reversal"
+        return None
 
     def _parse_challenges(self, result: dict[str, Any]) -> DevilsChallenges:
         """Parse LLM result into DevilsChallenges model."""

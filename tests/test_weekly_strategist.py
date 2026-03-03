@@ -97,7 +97,7 @@ class TestReviewWeek:
             assert len(files) == 1
             assert files[0].suffix == ".json"
 
-    def test_handles_opus_error(self, strategist, sample_weekly_package):
+    def test_handles_sonnet_error(self, strategist, sample_weekly_package):
         with patch.object(LLMClient, "call_anthropic") as mock_call:
             mock_call.return_value = {"error": "API timeout"}
             strategist._llm = LLMClient(mock_mode=False)

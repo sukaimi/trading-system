@@ -8,6 +8,7 @@ See TRADING_AGENT_PRD.md Section 4 for the communication map.
 
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any
 
 from agents.chart_analyst import ChartAnalyst
@@ -95,15 +96,55 @@ class TradingPipeline:
             return []
 
     def process_signals(self, signals: list[SignalAlert]) -> list[dict[str, Any]]:
-        """Process a list of signals through the full pipeline."""
+        """Process a list of signals through the full pipeline.
+
+        The analysis phase (MarketAnalyst + ChartAnalyst + DevilsAdvocate) runs
+        in parallel across signals using a thread pool. The execution phase
+        (RiskManager + Executor + Portfolio update) runs serially to protect
+        thread-unsafe portfolio state and executor.
+        """
+        # Phase 1: Run analysis in parallel (Analyst → Chart → Devil)
+        analysis_results: list[dict[str, Any]] = []
+        with ThreadPoolExecutor(max_workers=3) as pool:
+            futures = {
+                pool.submit(self._analyze_signal, signal): signal
+                for signal in signals
+            }
+            for future in as_completed(futures):
+                signal = futures[future]
+                try:
+                    analysis = future.result()
+                except Exception as e:
+                    log.error("Parallel analysis failed for %s: %s", signal.asset, e)
+                    analysis = {
+                        "signal": signal,
+                        "result": {"signal": signal.headline, "asset": signal.asset, "outcome": "analyst_error", "error": str(e)},
+                        "thesis": None,
+                        "verdict": None,
+                    }
+                analysis_results.append(analysis)
+
+        # Phase 2: Execute serially (Risk → Execute → Portfolio)
         results = []
-        for signal in signals:
-            result = self.process_single_signal(signal)
+        for analysis in analysis_results:
+            result = analysis["result"]
+            thesis = analysis.get("thesis")
+            verdict = analysis.get("verdict")
+            signal = analysis["signal"]
+
+            # If analysis phase already determined final outcome, skip execution
+            if result["outcome"] != "pending_execution":
+                results.append(result)
+                continue
+
+            # Serial execution phase
+            result = self._execute_trade(signal, thesis, verdict, result)
             results.append(result)
+
         return results
 
-    def process_single_signal(self, signal: SignalAlert) -> dict[str, Any]:
-        """Process one signal through: Analyst → Devil → Risk → Execute → Journal."""
+    def _analyze_signal(self, signal: SignalAlert) -> dict[str, Any]:
+        """Phase 1: Analyst → Chart → Devil (thread-safe, no portfolio mutation)."""
         result: dict[str, Any] = {
             "signal": signal.headline,
             "asset": signal.asset,
@@ -117,7 +158,7 @@ class TradingPipeline:
             log.error("Market Analyst failed for %s: %s", signal.asset, e)
             result["outcome"] = "analyst_error"
             result["error"] = str(e)
-            return result
+            return {"signal": signal, "result": result, "thesis": None, "verdict": None}
 
         if thesis is None:
             log.info("No trade thesis for %s — recording no-trade", signal.asset)
@@ -127,7 +168,7 @@ class TradingPipeline:
             except Exception as e:
                 log.error("Journal record_no_trade failed: %s", e)
             result["outcome"] = "no_trade"
-            return result
+            return {"signal": signal, "result": result, "thesis": None, "verdict": None}
 
         result["thesis"] = thesis.thesis
         result["confidence"] = thesis.confidence
@@ -147,7 +188,7 @@ class TradingPipeline:
             log.error("Devil's Advocate failed for %s: %s", signal.asset, e)
             result["outcome"] = "devil_error"
             result["error"] = str(e)
-            return result
+            return {"signal": signal, "result": result, "thesis": thesis, "verdict": None}
 
         result["verdict"] = verdict.verdict.value
         event_bus.emit("pipeline", "devil_verdict", {
@@ -165,7 +206,6 @@ class TradingPipeline:
                 self._journal.record_killed_trade(thesis, verdict)
             except Exception as e:
                 log.error("Journal record_killed_trade failed: %s", e)
-            # Record phantom trade
             self._phantom.record_missed(
                 asset=thesis.asset,
                 direction=thesis.direction.value,
@@ -177,8 +217,16 @@ class TradingPipeline:
                 thesis=thesis.thesis,
             )
             result["outcome"] = "killed"
-            return result
+            return {"signal": signal, "result": result, "thesis": thesis, "verdict": verdict}
 
+        # Analysis passed — mark for serial execution phase
+        result["outcome"] = "pending_execution"
+        return {"signal": signal, "result": result, "thesis": thesis, "verdict": verdict}
+
+    def _execute_trade(
+        self, signal: SignalAlert, thesis: TradeThesis, verdict: Any, result: dict[str, Any]
+    ) -> dict[str, Any]:
+        """Phase 2: Risk → Execute → Portfolio (serial, thread-unsafe operations)."""
         # Step 3: Build execution order and run risk checks
         try:
             exec_order = self._build_execution_order(thesis, verdict)
@@ -201,7 +249,6 @@ class TradingPipeline:
                 self._journal.record_killed_trade(thesis, verdict)
             except Exception as e:
                 log.error("Journal record_killed_trade failed: %s", e)
-            # Record phantom trade
             self._phantom.record_missed(
                 asset=thesis.asset,
                 direction=thesis.direction.value,
@@ -285,6 +332,22 @@ class TradingPipeline:
             thesis.asset,
         )
         return result
+
+    def process_single_signal(self, signal: SignalAlert) -> dict[str, Any]:
+        """Process one signal through the full pipeline (sequential fallback).
+
+        Used for single-signal processing. For batch processing, use
+        ``process_signals`` which parallelizes the analysis phase.
+        """
+        analysis = self._analyze_signal(signal)
+        result = analysis["result"]
+        thesis = analysis.get("thesis")
+        verdict = analysis.get("verdict")
+
+        if result["outcome"] != "pending_execution":
+            return result
+
+        return self._execute_trade(signal, thesis, verdict, result)
 
     def check_stop_losses(self) -> list[dict[str, Any]]:
         """Check all open positions against their stop-loss levels.

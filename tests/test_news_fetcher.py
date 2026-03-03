@@ -42,7 +42,7 @@ class TestFetchAllRSS:
             "feed": {"title": "Feed"},
         }
         articles = nf.fetch_all_rss()
-        # 7 feeds return same headline — should be deduped to 1
+        # 6 feeds return same headline — should be deduped to 1
         assert len(articles) == 1
 
 
