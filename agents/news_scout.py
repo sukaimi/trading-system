@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import os
+import random
 import re
 from datetime import datetime
 from typing import Any
@@ -79,13 +80,17 @@ class NewsScout:
 
     def classify_articles(self, articles: list[dict]) -> list[dict[str, Any]]:
         """Send articles to DeepSeek for classification."""
+        # Shuffle to avoid crypto-first bias from feed ordering
+        shuffled = list(articles)
+        random.shuffle(shuffled)
+
         # Format articles for the prompt
         article_text = "\n\n".join(
             f"[{i+1}] {a.get('title', 'No title')}\n"
             f"Source: {a.get('source', 'Unknown')}\n"
             f"Published: {a.get('published', 'Unknown')}\n"
             f"Summary: {a.get('summary', '')[:300]}"
-            for i, a in enumerate(articles[:30])  # Limit to 30 articles per batch
+            for i, a in enumerate(shuffled[:30])  # Limit to 30 articles per batch
         )
 
         valid_assets = ", ".join(f'"{a}"' for a in get_tradeable_assets() + ["MACRO"])
