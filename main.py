@@ -198,7 +198,7 @@ def main():
         for name, test_fn in [
             ("DeepSeek", lambda: llm_client.call_deepseek('Return {"ok":true}', "Respond with JSON.")),
             ("Kimi", lambda: llm_client.call_kimi('Return {"ok":true}', "Respond with JSON.")),
-            ("Anthropic", lambda: llm_client.call_anthropic('Return {"ok":true}', "Respond with JSON.")),
+            ("Anthropic", lambda: llm_client.call_anthropic("hi", "Reply with 1 word.", max_tokens=5)),
         ]:
             result = test_fn()
             if "error" in result:

@@ -201,6 +201,21 @@ class TestRunScheduledAnalysis:
         assert result == []
 
 
+class TestRunCircuitBreakerCheck:
+    def test_skips_when_halted(self, pipeline):
+        pipeline._portfolio.halted = True
+        pipeline._circuit_breaker = MagicMock()
+        pipeline.run_circuit_breaker_check()
+        pipeline._circuit_breaker.check.assert_not_called()
+
+    def test_runs_when_not_halted(self, pipeline):
+        pipeline._portfolio.halted = False
+        pipeline._circuit_breaker = MagicMock()
+        pipeline._circuit_breaker.check.return_value = None
+        pipeline.run_circuit_breaker_check()
+        pipeline._circuit_breaker.check.assert_called_once()
+
+
 class TestBuildExecutionOrder:
     def test_order_has_required_fields(self, pipeline):
         thesis = TradeThesis(

@@ -107,10 +107,16 @@ class LLMClient:
         prompt: str,
         system_prompt: str = "",
         response_schema: Type[BaseModel] | None = None,
+        max_tokens: int = 4096,
     ) -> dict[str, Any]:
         """Call Claude Opus 4.6 via Anthropic Messages API."""
         if self.mock_mode:
             return self._get_mock_response("anthropic", response_schema)
+
+        # Budget check — skip call if daily limit exceeded
+        if self._cost_tracker and not self._cost_tracker.check_budget("anthropic"):
+            log.warning("Anthropic daily budget exceeded — skipping call")
+            return {"error": "daily_budget_exceeded"}
 
         api_key = os.getenv(PROVIDERS["anthropic"]["env_key"], "")
         if not api_key:
@@ -126,7 +132,7 @@ class LLMClient:
                 },
                 json={
                     "model": PROVIDERS["anthropic"]["model"],
-                    "max_tokens": 4096,
+                    "max_tokens": max_tokens,
                     "system": system_prompt,
                     "messages": [{"role": "user", "content": prompt}],
                 },

@@ -91,6 +91,31 @@ class TestParseJSON:
         assert result["value"] == 99
 
 
+class TestBudgetCheck:
+    def test_anthropic_blocked_when_budget_exceeded(self, real_client):
+        mock_tracker = MagicMock()
+        mock_tracker.check_budget.return_value = False
+        real_client.set_cost_tracker(mock_tracker)
+
+        result = real_client.call_anthropic("test prompt")
+        assert result == {"error": "daily_budget_exceeded"}
+        mock_tracker.check_budget.assert_called_once_with("anthropic")
+
+    def test_anthropic_proceeds_when_budget_ok(self, mock_client):
+        mock_tracker = MagicMock()
+        mock_tracker.check_budget.return_value = True
+        mock_client.set_cost_tracker(mock_tracker)
+
+        # Mock mode returns mock response, so budget check is skipped
+        result = mock_client.call_anthropic("test prompt")
+        assert result.get("mock") is True
+
+    def test_max_tokens_parameter(self, mock_client):
+        # Should accept max_tokens without error
+        result = mock_client.call_anthropic("hi", "reply", max_tokens=5)
+        assert isinstance(result, dict)
+
+
 class TestCallWithFallback:
     def test_mock_mode(self, mock_client):
         result = mock_client.call_with_fallback("prompt")

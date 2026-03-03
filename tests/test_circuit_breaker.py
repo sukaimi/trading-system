@@ -2,6 +2,7 @@
 
 import json
 import os
+import time
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -130,6 +131,40 @@ class TestEscalateToOpus:
             decision = cb.escalate_to_opus(["daily_loss_limit"], crisis_state, {})
             assert decision.decision == CircuitBreakerAction.HOLD
             assert "unavailable" in decision.reasoning.lower()
+
+
+class TestEscalateCooldown:
+    def test_same_triggers_within_cooldown_returns_cached(self, cb, crisis_state):
+        # First call — makes LLM call
+        decision1 = cb.escalate_to_opus(["daily_loss_limit"], crisis_state, {})
+        assert isinstance(decision1, CircuitBreakerDecision)
+
+        # Second call with same triggers within cooldown — should return cached
+        decision2 = cb.escalate_to_opus(["daily_loss_limit"], crisis_state, {})
+        assert decision2 is decision1
+
+    def test_different_triggers_bypass_cooldown(self, cb, crisis_state):
+        decision1 = cb.escalate_to_opus(["daily_loss_limit"], crisis_state, {})
+
+        # Different triggers — should NOT use cache
+        decision2 = cb.escalate_to_opus(["max_drawdown"], crisis_state, {})
+        assert decision2 is not decision1
+
+    def test_expired_cooldown_makes_new_call(self, cb, crisis_state):
+        decision1 = cb.escalate_to_opus(["daily_loss_limit"], crisis_state, {})
+
+        # Simulate expired cooldown
+        cb._last_escalation_time = time.time() - 3601
+
+        decision2 = cb.escalate_to_opus(["daily_loss_limit"], crisis_state, {})
+        # Should be a new decision (not the same object)
+        assert decision2 is not decision1
+
+    def test_trigger_order_does_not_matter(self, cb, crisis_state):
+        decision1 = cb.escalate_to_opus(["daily_loss_limit", "max_drawdown"], crisis_state, {})
+        decision2 = cb.escalate_to_opus(["max_drawdown", "daily_loss_limit"], crisis_state, {})
+        # Same triggers in different order — should use cached
+        assert decision2 is decision1
 
 
 class TestExecuteDecision:

@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import json
 import os
+import time
 from datetime import datetime
 from typing import Any
 
@@ -84,6 +85,8 @@ Make your decision. Return JSON:
 class CircuitBreakerAgent:
     """Emergency circuit breaker — Python triggers + Opus crisis decision."""
 
+    COOLDOWN_SECONDS = 3600  # 1 hour between Opus calls for same triggers
+
     def __init__(
         self,
         llm_client: LLMClient | None = None,
@@ -95,6 +98,9 @@ class CircuitBreakerAgent:
         self._executor = executor
         self._portfolio = portfolio
         self._telegram = telegram
+        self._last_escalation_time: float = 0.0
+        self._last_triggers: list[str] = []
+        self._last_decision: CircuitBreakerDecision | None = None
 
     def check(
         self, portfolio_state: dict[str, Any], market_data: dict[str, Any]
@@ -127,6 +133,20 @@ class CircuitBreakerAgent:
         market_data: dict[str, Any],
     ) -> CircuitBreakerDecision:
         """Escalate to Opus for crisis decision."""
+        now = time.time()
+
+        # Cooldown + dedup: same triggers within 1 hour → return cached decision
+        if (
+            self._last_decision is not None
+            and sorted(triggered) == sorted(self._last_triggers)
+            and now - self._last_escalation_time < self.COOLDOWN_SECONDS
+        ):
+            log.info(
+                "Circuit breaker: same triggers %s within cooldown (%.0fs ago), using cached decision",
+                triggered, now - self._last_escalation_time,
+            )
+            return self._last_decision
+
         # IMMEDIATELY halt new trades
         if self._portfolio:
             self._portfolio.halted = True
@@ -154,15 +174,21 @@ class CircuitBreakerAgent:
 
         if result.get("error"):
             log.error("Opus crisis call failed: %s — defaulting to HOLD", result["error"])
-            return CircuitBreakerDecision(
+            decision = CircuitBreakerDecision(
                 triggers_fired=triggered,
                 decision=CircuitBreakerAction.HOLD,
                 reasoning=f"Opus unavailable: {result['error']}. Defaulting to HOLD.",
                 resume_conditions="Manual review required — Opus was unreachable",
                 telegram_message=f"CIRCUIT BREAKER: {', '.join(triggered)}. Opus unreachable — HOLD. Manual review needed.",
             )
+        else:
+            decision = self._parse_decision(result, triggered)
 
-        return self._parse_decision(result, triggered)
+        # Cache for cooldown/dedup
+        self._last_escalation_time = now
+        self._last_triggers = list(triggered)
+        self._last_decision = decision
+        return decision
 
     def execute_decision(self, decision: CircuitBreakerDecision) -> None:
         """Execute the circuit breaker decision."""

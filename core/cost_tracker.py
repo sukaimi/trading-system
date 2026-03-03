@@ -74,6 +74,33 @@ class CostTracker:
         self._persist()
         return record
 
+    # Daily spend limits per provider (USD)
+    DAILY_LIMITS: dict[str, float] = {
+        "anthropic": 0.15,  # ~$4.50/month max
+        "kimi": 0.05,
+        "deepseek": 0.03,
+    }
+
+    def check_budget(self, provider: str) -> bool:
+        """Return True if daily spend for provider is under its daily limit."""
+        today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        with self._lock:
+            today_spend = sum(
+                r["cost_usd"]
+                for r in self._calls
+                if r.get("provider") == provider
+                and r.get("timestamp", "").startswith(today)
+            )
+        limit = self.DAILY_LIMITS.get(provider, 1.0)
+        if today_spend >= limit:
+            from core.logger import setup_logger
+            _log = setup_logger("trading.cost_tracker")
+            _log.warning(
+                "%s daily budget exhausted: $%.4f / $%.2f",
+                provider, today_spend, limit,
+            )
+        return today_spend < limit
+
     def summary(self) -> dict[str, Any]:
         """Return cost summary for the dashboard."""
         with self._lock:

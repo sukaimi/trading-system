@@ -416,6 +416,10 @@ class TradingPipeline:
 
     def run_circuit_breaker_check(self, market_data: dict[str, Any] | None = None) -> None:
         """Run circuit breaker check against current portfolio state."""
+        if self._portfolio.halted:
+            log.info("System already halted — skipping circuit breaker check")
+            return
+
         try:
             portfolio_state = self._portfolio.snapshot()
             if market_data is None:
