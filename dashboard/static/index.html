@@ -733,6 +733,7 @@ body::after {
       <div class="metric-card">
         <div class="metric-label">Equity</div>
         <div class="metric-value neutral num-animate" id="equity">$0.00</div>
+        <div style="font-size:10px;opacity:0.4;margin-top:2px" id="initial-capital"></div>
       </div>
       <div class="metric-card">
         <div class="metric-label">Daily P&L</div>
@@ -1051,6 +1052,8 @@ function animateNumber(el, newText) {
 function renderPortfolio() {
   const p = state.portfolio;
   animateNumber(document.getElementById('equity'), '$' + fmt(p.equity || 0, 2));
+  const ic = p.initial_capital || 0;
+  if (ic > 0) document.getElementById('initial-capital').textContent = 'started at $' + fmt(ic, 2);
 
   const pnlEl = document.getElementById('daily-pnl');
   const pnl = p.daily_pnl_pct || 0;
