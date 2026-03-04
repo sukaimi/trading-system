@@ -1,0 +1,1282 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Agent Trading Floor</title>
+<style>
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+body {
+  background: #1a2030;
+  overflow: hidden;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 100vh;
+}
+canvas {
+  display: block;
+  image-rendering: pixelated;
+}
+@media (max-width: 600px) and (orientation: portrait) {
+  body::before {
+    content: '↻ Rotate for best view';
+    position: fixed;
+    bottom: 16px;
+    left: 50%;
+    transform: translateX(-50%);
+    color: #484f58;
+    font: 12px "SF Mono", monospace;
+    z-index: 10;
+    background: rgba(26,32,48,0.85);
+    padding: 6px 14px;
+    border-radius: 4px;
+    border: 1px solid #30363d;
+  }
+}
+</style>
+</head>
+<body>
+<canvas id="floor"></canvas>
+<script>
+const canvas = document.getElementById('floor');
+const ctx = canvas.getContext('2d');
+
+const dpr = window.devicePixelRatio || 1;
+function resize() {
+  canvas.width = window.innerWidth * dpr;
+  canvas.height = window.innerHeight * dpr;
+  canvas.style.width = window.innerWidth + 'px';
+  canvas.style.height = window.innerHeight + 'px';
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+}
+resize();
+window.addEventListener('resize', resize);
+
+// ── Animation globals ──────────────────────────────────────────
+let animTime = 0;
+let lastFrameTime = 0;
+
+// ── Responsive scale ───────────────────────────────────────────
+const GRID_SIZE = 16;
+
+function getLayout() {
+  const W = window.innerWidth;
+  const H = window.innerHeight;
+  const isNarrow = W < 600;
+  const padding = isNarrow ? 30 : Math.min(80, W * 0.06);
+  const titleSpace = isNarrow ? 40 : 60;
+  const tileFromW = (W - padding * 2) / (GRID_SIZE - 1);
+  const usableH = H - titleSpace - padding * 0.5;
+  const tileFromH = usableH / ((GRID_SIZE - 1) + 3);
+  const tileH = Math.min(tileFromW / 2, tileFromH, 32);
+  const tileW = tileH * 2;
+  const s = tileW / 64;
+  const diamondH = (GRID_SIZE - 1) * tileH;
+  const originX = W / 2;
+  const charAbove = 55 * s;
+  const originY = titleSpace + charAbove + (usableH - charAbove - diamondH - 20 * s) / 2;
+  return { tileW, tileH, s, originX, originY, titleSpace, padding, W, H };
+}
+
+function isoToScreen(gx, gy) {
+  const { tileW, tileH, originX, originY } = getLayout();
+  return {
+    x: originX + (gx - gy) * (tileW / 2),
+    y: originY + (gx + gy) * (tileH / 2)
+  };
+}
+
+// ── Color utilities ────────────────────────────────────────────
+function shadeColor(color, percent) {
+  const num = parseInt(color.replace('#', ''), 16);
+  const r = Math.min(255, Math.max(0, (num >> 16) + percent));
+  const g = Math.min(255, Math.max(0, ((num >> 8) & 0x00FF) + percent));
+  const b = Math.min(255, Math.max(0, (num & 0x0000FF) + percent));
+  return '#' + (0x1000000 + (r << 16) + (g << 8) + b).toString(16).slice(1);
+}
+
+// ── Draw isometric floor tile ──────────────────────────────────
+function drawTile(gx, gy, fillColor, strokeColor) {
+  const { tileW, tileH } = getLayout();
+  const { x, y } = isoToScreen(gx, gy);
+  ctx.beginPath();
+  ctx.moveTo(x, y);
+  ctx.lineTo(x + tileW / 2, y + tileH / 2);
+  ctx.lineTo(x, y + tileH);
+  ctx.lineTo(x - tileW / 2, y + tileH / 2);
+  ctx.closePath();
+  ctx.fillStyle = fillColor;
+  ctx.fill();
+  ctx.strokeStyle = strokeColor;
+  ctx.lineWidth = 0.5;
+  ctx.stroke();
+}
+
+// ── Draw isometric cube ────────────────────────────────────────
+function drawCube(gx, gy, w, h, d, color) {
+  const { tileW, tileH } = getLayout();
+  const { x, y } = isoToScreen(gx, gy);
+  const dark = shadeColor(color, -30);
+  const light = shadeColor(color, 15);
+  ctx.beginPath();
+  ctx.moveTo(x, y - h);
+  ctx.lineTo(x + (w * tileW) / 2, y - h + (w * tileH) / 2);
+  ctx.lineTo(x, y - h + (w * tileH));
+  ctx.lineTo(x - (d * tileW) / 2, y - h + (d * tileH) / 2);
+  ctx.closePath();
+  ctx.fillStyle = light;
+  ctx.fill();
+  ctx.beginPath();
+  ctx.moveTo(x - (d * tileW) / 2, y - h + (d * tileH) / 2);
+  ctx.lineTo(x, y - h + (w * tileH));
+  ctx.lineTo(x, y + (w * tileH));
+  ctx.lineTo(x - (d * tileW) / 2, y + (d * tileH) / 2);
+  ctx.closePath();
+  ctx.fillStyle = dark;
+  ctx.fill();
+  ctx.beginPath();
+  ctx.moveTo(x, y - h + (w * tileH));
+  ctx.lineTo(x + (w * tileW) / 2, y - h + (w * tileH) / 2);
+  ctx.lineTo(x + (w * tileW) / 2, y + (w * tileH) / 2);
+  ctx.lineTo(x, y + (w * tileH));
+  ctx.closePath();
+  ctx.fillStyle = color;
+  ctx.fill();
+}
+
+// ── Draw a monitor ─────────────────────────────────────────────
+function drawMonitor(gx, gy, screenColor) {
+  const { x, y } = isoToScreen(gx, gy);
+  const { s } = getLayout();
+  const deskH = 14 * s;
+  ctx.fillStyle = '#6a7080';
+  ctx.fillRect(x - 1 * s, y - deskH - 12 * s, 2 * s, 5 * s);
+  ctx.fillStyle = '#3a4258';
+  ctx.fillRect(x - 8 * s, y - deskH - 22 * s, 16 * s, 12 * s);
+  ctx.fillStyle = screenColor;
+  ctx.fillRect(x - 7 * s, y - deskH - 21 * s, 14 * s, 10 * s);
+  ctx.fillStyle = 'rgba(255,255,255,0.08)';
+  ctx.fillRect(x - 6 * s, y - deskH - 20 * s, 4 * s, 8 * s);
+  ctx.fillStyle = 'rgba(255,255,255,0.15)';
+  for (let i = 0; i < 4; i++) {
+    const w = (3 + (gx * 3 + i * 7) % 8) * s;
+    ctx.fillRect(x - 5 * s, y - deskH - 19 * s + i * 2.5 * s, w, 1 * s);
+  }
+}
+
+// ── Draw a large monitor (executive) ──────────────────────────
+function drawLargeMonitor(gx, gy, screenColor) {
+  const { x, y } = isoToScreen(gx, gy);
+  const { s } = getLayout();
+  const deskH = 14 * s;
+  // Stand
+  ctx.fillStyle = '#6a7080';
+  ctx.fillRect(x - 1.5 * s, y - deskH - 15 * s, 3 * s, 7 * s);
+  // Base plate
+  ctx.fillStyle = '#5a6070';
+  ctx.fillRect(x - 4 * s, y - deskH - 8 * s, 8 * s, 2 * s);
+  // Frame
+  ctx.fillStyle = '#3a4258';
+  ctx.fillRect(x - 12 * s, y - deskH - 30 * s, 24 * s, 17 * s);
+  // Screen
+  ctx.fillStyle = screenColor;
+  ctx.fillRect(x - 11 * s, y - deskH - 29 * s, 22 * s, 15 * s);
+  // Glare
+  ctx.fillStyle = 'rgba(255,255,255,0.07)';
+  ctx.fillRect(x - 9 * s, y - deskH - 28 * s, 6 * s, 12 * s);
+  // Data lines
+  ctx.fillStyle = 'rgba(255,255,255,0.15)';
+  for (let i = 0; i < 5; i++) {
+    const w = (4 + (gx * 3 + i * 7) % 12) * s;
+    ctx.fillRect(x - 8 * s, y - deskH - 27 * s + i * 3 * s, w, 1.2 * s);
+  }
+}
+
+// ── Draw a chair ───────────────────────────────────────────────
+function drawChair(gx, gy) {
+  const { x, y } = isoToScreen(gx, gy);
+  const { s } = getLayout();
+  ctx.fillStyle = '#4a5060';
+  ctx.fillRect(x - 5 * s, y - 8 * s, 10 * s, 3 * s);
+  ctx.fillStyle = '#3a4050';
+  ctx.fillRect(x - 5 * s, y - 16 * s, 10 * s, 8 * s);
+  ctx.fillStyle = '#505868';
+  ctx.fillRect(x - 4 * s, y - 15 * s, 8 * s, 6 * s);
+  ctx.fillStyle = '#667';
+  ctx.fillRect(x - 4 * s, y - 5 * s, 1.5 * s, 5 * s);
+  ctx.fillRect(x + 2.5 * s, y - 5 * s, 1.5 * s, 5 * s);
+  ctx.fillStyle = '#556';
+  ctx.beginPath();
+  ctx.arc(x - 4 * s, y + 1 * s, 1.2 * s, 0, Math.PI * 2);
+  ctx.arc(x + 4 * s, y + 1 * s, 1.2 * s, 0, Math.PI * 2);
+  ctx.fill();
+}
+
+// ── Draw a potted plant ────────────────────────────────────────
+function drawPlant(gx, gy) {
+  const { x, y } = isoToScreen(gx, gy);
+  const { s } = getLayout();
+  ctx.fillStyle = '#6b4226';
+  ctx.fillRect(x - 4 * s, y - 8 * s, 8 * s, 8 * s);
+  ctx.fillStyle = '#7a4e2e';
+  ctx.fillRect(x - 5 * s, y - 9 * s, 10 * s, 2 * s);
+  ctx.fillStyle = '#3a2510';
+  ctx.fillRect(x - 3 * s, y - 10 * s, 6 * s, 2 * s);
+  ctx.fillStyle = '#2d8a4e';
+  ctx.fillRect(x - 6 * s, y - 20 * s, 5 * s, 5 * s);
+  ctx.fillRect(x + 1 * s, y - 22 * s, 5 * s, 5 * s);
+  ctx.fillRect(x - 3 * s, y - 25 * s, 6 * s, 6 * s);
+  ctx.fillStyle = '#3fb950';
+  ctx.fillRect(x - 2 * s, y - 24 * s, 4 * s, 4 * s);
+  ctx.fillRect(x - 5 * s, y - 18 * s, 3 * s, 3 * s);
+  ctx.fillRect(x + 2 * s, y - 20 * s, 3 * s, 3 * s);
+  ctx.fillStyle = '#2a6b3a';
+  ctx.fillRect(x - 0.5 * s, y - 16 * s, 1 * s, 6 * s);
+}
+
+// ── Draw a wall ticker board ───────────────────────────────────
+function drawTickerBoard(gx, gy) {
+  const { x, y } = isoToScreen(gx, gy);
+  const { s } = getLayout();
+  const boardW = 50 * s;
+  const boardH = 18 * s;
+  ctx.fillStyle = '#2a3050';
+  ctx.fillRect(x - boardW / 2, y - 48 * s, boardW, boardH);
+  ctx.strokeStyle = '#4a5570';
+  ctx.lineWidth = 1 * s;
+  ctx.strokeRect(x - boardW / 2, y - 48 * s, boardW, boardH);
+  ctx.fillStyle = '#1a2238';
+  ctx.fillRect(x - boardW / 2 + 2 * s, y - 46 * s, boardW - 4 * s, boardH - 4 * s);
+  const tickers = [
+    { sym: 'BTC', color: '#3fb950', val: '87,241' },
+    { sym: 'ETH', color: '#f85149', val: '2,148' },
+    { sym: 'SPY', color: '#3fb950', val: '512' },
+  ];
+  const fontSize = Math.max(5, Math.round(6 * s));
+  ctx.font = `bold ${fontSize}px "SF Mono", "Courier New", monospace`;
+  const startX = x - boardW / 2 + 5 * s;
+  const spacing = (boardW - 10 * s) / tickers.length;
+  tickers.forEach((t, i) => {
+    const tx = startX + i * spacing;
+    ctx.fillStyle = '#8b949e';
+    ctx.textAlign = 'left';
+    ctx.fillText(t.sym, tx, y - 42 * s);
+    ctx.fillStyle = t.color;
+    ctx.fillText(t.val, tx, y - 36 * s);
+  });
+}
+
+// ── Draw massive wall display (right wall) ────────────────────
+function drawWallDisplay() {
+  const { s, tileW, tileH } = getLayout();
+
+  // Screen spans gx 0.5–7.5 on right wall (gy=0): top-left to mid-top
+  const pL = isoToScreen(0.5, 0);
+  const pR = isoToScreen(7.5, 0);
+  const dx = pR.x - pL.x;
+  const dy = pR.y - pL.y;
+  const wallLen = Math.sqrt(dx * dx + dy * dy);
+  const wallAngle = Math.atan2(dy, dx);
+
+  const scrW = wallLen * 0.92;
+  const scrH = 28 * s;
+
+  // Center of screen, raised on wall
+  const cx = (pL.x + pR.x) / 2;
+  const cy = (pL.y + pR.y) / 2 - 30 * s;
+
+  ctx.save();
+  ctx.translate(cx, cy);
+  ctx.rotate(wallAngle);
+
+  // Bezel
+  const bx = -scrW / 2 - 2 * s;
+  const by = -scrH / 2 - 2 * s;
+  ctx.fillStyle = '#1a1e2e';
+  ctx.fillRect(bx, by, scrW + 4 * s, scrH + 4 * s);
+  ctx.strokeStyle = '#3a4a64';
+  ctx.lineWidth = 2;
+  ctx.strokeRect(bx, by, scrW + 4 * s, scrH + 4 * s);
+
+  // Screen
+  ctx.fillStyle = '#0c1525';
+  ctx.fillRect(-scrW / 2, -scrH / 2, scrW, scrH);
+
+  // ── Left: Equity curve (60%) ──
+  const chartW = scrW * 0.58;
+  const chartX = -scrW / 2 + 4 * s;
+  const chartTop = -scrH / 2 + 2 * s;
+
+  const lblFs = Math.max(4, Math.round(5 * s));
+  ctx.font = `bold ${lblFs}px "SF Mono", "Courier New", monospace`;
+  ctx.fillStyle = '#5a7a90';
+  ctx.textAlign = 'left';
+  ctx.fillText('PORTFOLIO EQUITY', chartX, chartTop + lblFs + 1 * s);
+
+  // Grid lines
+  ctx.strokeStyle = 'rgba(100,160,220,0.08)';
+  ctx.lineWidth = 0.5;
+  for (let i = 0; i < 4; i++) {
+    const gy = chartTop + lblFs + 4 * s + i * (scrH - lblFs - 10 * s) / 3;
+    ctx.beginPath();
+    ctx.moveTo(chartX, gy);
+    ctx.lineTo(chartX + chartW, gy);
+    ctx.stroke();
+  }
+
+  // Equity curve
+  const curveTop = chartTop + lblFs + 6 * s;
+  const curveBot = scrH / 2 - 3 * s;
+  const curveAmp = (curveBot - curveTop) * 0.7;
+  ctx.strokeStyle = '#3fb950';
+  ctx.lineWidth = 1.5 * s;
+  ctx.beginPath();
+  for (let i = 0; i <= 30; i++) {
+    const t = i / 30;
+    const px = chartX + t * chartW;
+    const val = 0.5 + t * 0.15 +
+      Math.sin(t * 8 + animTime * 0.15) * 0.08 +
+      Math.sin(t * 3.2) * 0.12 +
+      Math.cos(t * 5.5 + 1) * 0.06;
+    const py = curveBot - val * curveAmp;
+    i === 0 ? ctx.moveTo(px, py) : ctx.lineTo(px, py);
+  }
+  ctx.stroke();
+  // Fill under curve
+  ctx.lineTo(chartX + chartW, curveBot);
+  ctx.lineTo(chartX, curveBot);
+  ctx.closePath();
+  ctx.fillStyle = 'rgba(63,185,80,0.1)';
+  ctx.fill();
+
+  // ── Right: Top 3 markets (38%) ──
+  const mkX = chartX + chartW + 6 * s;
+  const mkW = scrW - chartW - 14 * s;
+
+  // Divider
+  ctx.strokeStyle = 'rgba(100,160,220,0.15)';
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.moveTo(mkX - 3 * s, -scrH / 2 + 3 * s);
+  ctx.lineTo(mkX - 3 * s, scrH / 2 - 3 * s);
+  ctx.stroke();
+
+  ctx.font = `bold ${lblFs}px "SF Mono", "Courier New", monospace`;
+  ctx.fillStyle = '#5a7a90';
+  ctx.textAlign = 'left';
+  ctx.fillText('TOP MARKETS', mkX, chartTop + lblFs + 1 * s);
+
+  const markets = [
+    { sym: 'BTC', price: '87,241', chg: '+2.4%', color: '#3fb950' },
+    { sym: 'ETH', price: '2,148',  chg: '-1.2%', color: '#f85149' },
+    { sym: 'SPY', price: '512.3',  chg: '+0.8%', color: '#3fb950' },
+  ];
+  const symFs = Math.max(5, Math.round(6.5 * s));
+  const valFs = Math.max(4, Math.round(5 * s));
+  const rowH = (scrH - 12 * s - lblFs) / 3;
+
+  markets.forEach((mk, i) => {
+    const ry = chartTop + lblFs + 6 * s + i * rowH;
+
+    ctx.font = `bold ${symFs}px "SF Mono", "Courier New", monospace`;
+    ctx.fillStyle = '#c9d1d9';
+    ctx.textAlign = 'left';
+    ctx.fillText(mk.sym, mkX, ry + symFs);
+
+    ctx.font = `${valFs}px "SF Mono", "Courier New", monospace`;
+    ctx.fillStyle = '#8b949e';
+    ctx.fillText('$' + mk.price, mkX, ry + symFs + valFs + 2 * s);
+
+    ctx.fillStyle = mk.color;
+    ctx.textAlign = 'right';
+    ctx.fillText(mk.chg, mkX + mkW, ry + symFs);
+
+    // Mini sparkline
+    ctx.strokeStyle = mk.color;
+    ctx.lineWidth = 0.8 * s;
+    ctx.beginPath();
+    const spW = mkW * 0.4;
+    const spX = mkX + mkW - spW;
+    const spY = ry + symFs + valFs + 2 * s;
+    for (let j = 0; j <= 8; j++) {
+      const st = j / 8;
+      const sv = Math.sin(st * 5 + i * 2 + animTime * 0.3) * 0.5 + 0.5;
+      const sx = spX + st * spW;
+      const sy = spY + 2 * s - sv * 4 * s;
+      j === 0 ? ctx.moveTo(sx, sy) : ctx.lineTo(sx, sy);
+    }
+    ctx.stroke();
+    ctx.textAlign = 'left';
+  });
+
+  ctx.restore();
+}
+
+// ── Draw a water cooler ────────────────────────────────────────
+function drawWaterCooler(gx, gy) {
+  const { x, y } = isoToScreen(gx, gy);
+  const { s } = getLayout();
+  ctx.fillStyle = '#cccccc';
+  ctx.fillRect(x - 4 * s, y - 18 * s, 8 * s, 18 * s);
+  ctx.fillStyle = '#bbbbbb';
+  ctx.fillRect(x, y - 18 * s, 4 * s, 18 * s);
+  ctx.fillStyle = '#4488cc';
+  ctx.fillRect(x - 3 * s, y - 30 * s, 6 * s, 12 * s);
+  ctx.fillStyle = '#5599dd';
+  ctx.fillRect(x - 3 * s, y - 30 * s, 3 * s, 12 * s);
+  ctx.fillStyle = '#336699';
+  ctx.fillRect(x - 2 * s, y - 32 * s, 4 * s, 2 * s);
+  ctx.fillStyle = 'rgba(255,255,255,0.1)';
+  ctx.fillRect(x - 2 * s, y - 28 * s, 2 * s, 8 * s);
+}
+
+// ── Draw a Roblox-style character ──────────────────────────────
+function drawCharacter(gx, gy, colors, accessory, legPhase, bobY, seated) {
+  const { s } = getLayout();
+  const { x, y } = isoToScreen(gx, gy);
+  const baseY = y + (bobY || 0);
+
+  const headW = 16 * s;
+  const headH = 16 * s;
+  const bodyW = 18 * s;
+  const bodyH = 20 * s;
+  const armW = 6 * s;
+  const armH = seated ? 14 * s : 18 * s;
+
+  const legSwing = legPhase ? Math.sin(legPhase) * 3 * s : 0;
+
+  // Shadow
+  ctx.beginPath();
+  ctx.ellipse(x, baseY + 4 * s, 16 * s, 7 * s, 0, 0, Math.PI * 2);
+  ctx.fillStyle = 'rgba(0,0,0,0.35)';
+  ctx.fill();
+
+  let bodyBottom;
+  if (seated) {
+    // Seated: bent legs visible, no shoes, raised higher so character is clearly visible
+    const seatLegH = 8 * s;
+    bodyBottom = baseY - seatLegH;
+    ctx.fillStyle = shadeColor(colors.legs, -10);
+    ctx.fillRect(x - 8 * s, baseY - seatLegH, 7 * s, seatLegH);
+    ctx.fillStyle = colors.legs;
+    ctx.fillRect(x + 1 * s, baseY - seatLegH, 7 * s, seatLegH);
+  } else {
+    // Standing: shoes + legs
+    const shoeH = 3 * s;
+    const legH = 12 * s;
+    const shoeTop = baseY - shoeH;
+    ctx.fillStyle = '#1a1a1a';
+    ctx.fillRect(x - 8 * s, shoeTop + legSwing, 7 * s, shoeH);
+    ctx.fillRect(x + 1 * s, shoeTop - legSwing, 7 * s, shoeH);
+    ctx.fillStyle = '#333';
+    ctx.fillRect(x - 8 * s, baseY - 1 * s + legSwing, 7 * s, 1 * s);
+    ctx.fillRect(x + 1 * s, baseY - 1 * s - legSwing, 7 * s, 1 * s);
+    const legTop = shoeTop - legH;
+    bodyBottom = legTop;
+    ctx.fillStyle = shadeColor(colors.legs, -10);
+    ctx.fillRect(x - 8 * s, legTop + legSwing, 7 * s, legH);
+    ctx.fillStyle = colors.legs;
+    ctx.fillRect(x + 1 * s, legTop - legSwing, 7 * s, legH);
+    ctx.fillStyle = shadeColor(colors.legs, -25);
+    ctx.fillRect(x - 2 * s, legTop, 1 * s, legH);
+  }
+
+  // Body
+  const bodyTop = bodyBottom - bodyH;
+  ctx.fillStyle = colors.body;
+  ctx.fillRect(x - bodyW / 2, bodyTop, bodyW, bodyH);
+  ctx.fillStyle = shadeColor(colors.body, 20);
+  ctx.fillRect(x + 1 * s, bodyTop, bodyW / 2 - 1 * s, bodyH);
+  ctx.fillStyle = shadeColor(colors.body, -20);
+  ctx.fillRect(x - 4 * s, bodyTop, 8 * s, 2 * s);
+  ctx.fillStyle = '#3a3a4a';
+  ctx.fillRect(x - bodyW / 2, bodyTop + bodyH - 3 * s, bodyW, 2 * s);
+  ctx.fillStyle = '#d4a830';
+  ctx.fillRect(x - 1.5 * s, bodyTop + bodyH - 3 * s, 3 * s, 2 * s);
+
+  // Arms
+  ctx.fillStyle = shadeColor(colors.body, -20);
+  ctx.fillRect(x - bodyW / 2 - armW, bodyTop + 2 * s, armW, armH);
+  ctx.fillStyle = colors.skin;
+  ctx.fillRect(x - bodyW / 2 - armW, bodyTop + 2 * s + armH, armW, 3 * s);
+  ctx.fillStyle = shadeColor(colors.body, 10);
+  ctx.fillRect(x + bodyW / 2, bodyTop + 2 * s, armW, armH);
+  ctx.fillStyle = shadeColor(colors.skin, 10);
+  ctx.fillRect(x + bodyW / 2, bodyTop + 2 * s + armH, armW, 3 * s);
+
+  // Head
+  const headTop = bodyTop - headH;
+  ctx.fillStyle = colors.skin;
+  ctx.fillRect(x - headW / 2, headTop, headW, headH);
+  ctx.fillStyle = shadeColor(colors.skin, 12);
+  ctx.fillRect(x, headTop, headW / 2, headH);
+  ctx.fillStyle = shadeColor(colors.skin, 25);
+  ctx.fillRect(x - headW / 2, headTop, headW, 2 * s);
+
+  // Hair
+  if (colors.hair) {
+    ctx.fillStyle = colors.hair;
+    ctx.fillRect(x - headW / 2, headTop, headW, 5 * s);
+    ctx.fillRect(x - headW / 2, headTop, 2 * s, 8 * s);
+    ctx.fillRect(x + headW / 2 - 2 * s, headTop, 2 * s, 7 * s);
+  }
+
+  // Face
+  const sleeping = seated && accessory === 'siren';
+  ctx.fillStyle = colors.hair || '#333';
+  ctx.fillRect(x - 6 * s, headTop + 5 * s, 4 * s, 1 * s);
+  ctx.fillRect(x + 2 * s, headTop + 5 * s, 4 * s, 1 * s);
+  if (sleeping) {
+    // Closed eyes — horizontal lines
+    ctx.fillStyle = colors.hair || '#333';
+    ctx.fillRect(x - 6 * s, headTop + 8.5 * s, 4 * s, 1 * s);
+    ctx.fillRect(x + 2 * s, headTop + 8.5 * s, 4 * s, 1 * s);
+  } else {
+    // Open eyes
+    ctx.fillStyle = '#ffffff';
+    ctx.fillRect(x - 6 * s, headTop + 7 * s, 4 * s, 3 * s);
+    ctx.fillRect(x + 2 * s, headTop + 7 * s, 4 * s, 3 * s);
+    ctx.fillStyle = '#1a1a2e';
+    ctx.fillRect(x - 5 * s, headTop + 8 * s, 2 * s, 2 * s);
+    ctx.fillRect(x + 3 * s, headTop + 8 * s, 2 * s, 2 * s);
+    ctx.fillStyle = '#ffffff';
+    ctx.fillRect(x - 5 * s, headTop + 8 * s, 1 * s, 1 * s);
+    ctx.fillRect(x + 3 * s, headTop + 8 * s, 1 * s, 1 * s);
+  }
+  ctx.fillStyle = shadeColor(colors.skin, -15);
+  ctx.fillRect(x - 0.5 * s, headTop + 10 * s, 1 * s, 2 * s);
+  ctx.fillStyle = '#cc8877';
+  ctx.fillRect(x - 2 * s, headTop + 13 * s, 4 * s, 1 * s);
+
+  // Hat
+  if (colors.hat) {
+    ctx.fillStyle = colors.hat;
+    ctx.fillRect(x - headW / 2 - 2 * s, headTop - 2 * s, headW + 4 * s, 3 * s);
+    ctx.fillRect(x - headW / 2 + 1 * s, headTop - 8 * s, headW - 2 * s, 6 * s);
+    ctx.fillStyle = shadeColor(colors.hat, -30);
+    ctx.fillRect(x - headW / 2 + 1 * s, headTop - 3 * s, headW - 2 * s, 2 * s);
+  }
+
+  // Accessories
+  if (accessory === 'newspaper') {
+    ctx.fillStyle = '#e8e0d0';
+    ctx.fillRect(x + bodyW / 2 + armW - 1 * s, bodyTop + 6 * s, 8 * s, 10 * s);
+    ctx.fillStyle = '#bbb';
+    for (let i = 0; i < 3; i++)
+      ctx.fillRect(x + bodyW / 2 + armW + 0.5 * s, bodyTop + 8 * s + i * 3 * s, 5 * s, 1 * s);
+  } else if (accessory === 'clipboard') {
+    ctx.fillStyle = '#c9a96e';
+    ctx.fillRect(x + bodyW / 2 + armW - 1 * s, bodyTop + 4 * s, 7 * s, 10 * s);
+    ctx.fillStyle = '#eee';
+    ctx.fillRect(x + bodyW / 2 + armW, bodyTop + 6 * s, 5 * s, 7 * s);
+    ctx.fillStyle = '#777';
+    ctx.fillRect(x + bodyW / 2 + armW + 2 * s, bodyTop + 3 * s, 2 * s, 2 * s);
+  } else if (accessory === 'chart') {
+    ctx.fillStyle = '#222';
+    ctx.fillRect(x - bodyW / 2 - armW - 7 * s, bodyTop + 4 * s, 8 * s, 12 * s);
+    ctx.fillStyle = '#0a1628';
+    ctx.fillRect(x - bodyW / 2 - armW - 6 * s, bodyTop + 5 * s, 6 * s, 10 * s);
+    ctx.strokeStyle = '#3fb950';
+    ctx.lineWidth = 1 * s;
+    ctx.beginPath();
+    const cx2 = x - bodyW / 2 - armW - 5 * s;
+    const cy2 = bodyTop + 12 * s;
+    ctx.moveTo(cx2, cy2);
+    ctx.lineTo(cx2 + 1 * s, cy2 - 2 * s);
+    ctx.lineTo(cx2 + 2 * s, cy2 - 1 * s);
+    ctx.lineTo(cx2 + 3 * s, cy2 - 4 * s);
+    ctx.lineTo(cx2 + 4 * s, cy2 - 3 * s);
+    ctx.stroke();
+  } else if (accessory === 'horns') {
+    ctx.fillStyle = '#cc2222';
+    ctx.fillRect(x - headW / 2 - 1 * s, headTop - 6 * s, 3 * s, 5 * s);
+    ctx.fillRect(x + headW / 2 - 2 * s, headTop - 6 * s, 3 * s, 5 * s);
+    ctx.fillRect(x - headW / 2 - 2 * s, headTop - 8 * s, 2 * s, 3 * s);
+    ctx.fillRect(x + headW / 2, headTop - 8 * s, 2 * s, 3 * s);
+  } else if (accessory === 'shield') {
+    ctx.fillStyle = '#d29922';
+    ctx.fillRect(x - bodyW / 2 - armW - 5 * s, bodyTop + 4 * s, 6 * s, 10 * s);
+    ctx.fillStyle = '#e8b830';
+    ctx.fillRect(x - bodyW / 2 - armW - 4 * s, bodyTop + 5 * s, 4 * s, 8 * s);
+    ctx.fillStyle = '#d29922';
+    ctx.fillRect(x - bodyW / 2 - armW - 3 * s, bodyTop + 7 * s, 2 * s, 4 * s);
+  } else if (accessory === 'bolt') {
+    ctx.fillStyle = '#f0883e';
+    ctx.fillRect(x + 1 * s, headTop - 12 * s, 4 * s, 3 * s);
+    ctx.fillRect(x - 1 * s, headTop - 10 * s, 4 * s, 3 * s);
+    ctx.fillRect(x + 1 * s, headTop - 8 * s, 4 * s, 3 * s);
+  } else if (accessory === 'book') {
+    ctx.fillStyle = '#39d2c0';
+    ctx.fillRect(x + bodyW / 2 + armW - 1 * s, bodyTop + 5 * s, 6 * s, 8 * s);
+    ctx.fillStyle = '#eee';
+    ctx.fillRect(x + bodyW / 2 + armW, bodyTop + 6 * s, 4 * s, 6 * s);
+    ctx.fillStyle = '#333';
+    ctx.fillRect(x + bodyW / 2 + armW + 5 * s, bodyTop + 4 * s, 1 * s, 10 * s);
+    ctx.fillStyle = '#58a6ff';
+    ctx.fillRect(x + bodyW / 2 + armW + 5 * s, bodyTop + 4 * s, 1 * s, 2 * s);
+  } else if (accessory === 'glasses') {
+    ctx.strokeStyle = '#d4a830';
+    ctx.lineWidth = 1 * s;
+    ctx.strokeRect(x - 6 * s, headTop + 6.5 * s, 5 * s, 4 * s);
+    ctx.strokeRect(x + 1 * s, headTop + 6.5 * s, 5 * s, 4 * s);
+    ctx.beginPath();
+    ctx.moveTo(x - 1 * s, headTop + 8 * s);
+    ctx.lineTo(x + 1 * s, headTop + 8 * s);
+    ctx.stroke();
+  } else if (accessory === 'siren' && !seated) {
+    // Active siren — only when walking/interacting
+    const pr = (5 + Math.sin(animTime * 3) * 1.5) * s;
+    const ga = 0.15 + Math.sin(animTime * 3) * 0.08;
+    ctx.fillStyle = `rgba(255,50,50,${ga})`;
+    ctx.beginPath();
+    ctx.arc(x, headTop - 8 * s, pr * 2, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = '#ff3333';
+    ctx.beginPath();
+    ctx.arc(x, headTop - 8 * s, pr, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = '#ff8888';
+    ctx.beginPath();
+    ctx.arc(x - 1 * s, headTop - 9 * s, 2 * s, 0, Math.PI * 2);
+    ctx.fill();
+  } else if (accessory === 'siren' && seated) {
+    // Sleeping Zs — idle Circuit Breaker
+    const zFont = Math.max(6, Math.round(8 * s));
+    ctx.font = `bold ${zFont}px "SF Mono", "Courier New", monospace`;
+    ctx.fillStyle = 'rgba(140,180,255,0.7)';
+    for (let i = 0; i < 3; i++) {
+      const zt = animTime * 0.8 + i * 1.5;
+      const cycle = (zt % 3) / 3;
+      const zx = x + (6 + i * 5) * s + Math.sin(zt) * 2 * s;
+      const zy = headTop - (8 + cycle * 20) * s;
+      const za = 1.0 - cycle;
+      const zSize = zFont * (0.6 + i * 0.25);
+      ctx.globalAlpha = za * 0.8;
+      ctx.font = `bold ${Math.round(zSize)}px "SF Mono", "Courier New", monospace`;
+      ctx.fillText('Z', zx, zy);
+    }
+    ctx.globalAlpha = 1.0;
+  }
+
+  return { x, baseY };
+}
+
+// ── Draw speech bubble dots ────────────────────────────────────
+function drawSpeechBubble(screenX, screenY) {
+  const { s } = getLayout();
+  const bx = screenX;
+  const by = screenY - 60 * s;
+
+  // Bubble background
+  ctx.fillStyle = 'rgba(255,255,255,0.9)';
+  ctx.beginPath();
+  ctx.arc(bx, by, 8 * s, 0, Math.PI * 2);
+  ctx.fill();
+
+  // Animated dots
+  ctx.fillStyle = '#333';
+  for (let i = 0; i < 3; i++) {
+    const dotY = by + Math.sin(animTime * 4 + i * 1.2) * 1.5 * s;
+    ctx.beginPath();
+    ctx.arc(bx - 3 * s + i * 3 * s, dotY, 1 * s, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  // Bubble tail
+  ctx.fillStyle = 'rgba(255,255,255,0.9)';
+  ctx.beginPath();
+  ctx.arc(bx + 2 * s, by + 7 * s, 2.5 * s, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.beginPath();
+  ctx.arc(bx + 3 * s, by + 11 * s, 1.5 * s, 0, Math.PI * 2);
+  ctx.fill();
+}
+
+// ── Draw glass partition (office walls) ────────────────────────
+function drawGlassPartition(fromGx, fromGy, toGx, toGy) {
+  const from = isoToScreen(fromGx, fromGy);
+  const to = isoToScreen(toGx, toGy);
+  const { s } = getLayout();
+  const wallH = 28 * s;
+
+  // Glass fill
+  ctx.fillStyle = 'rgba(140, 200, 250, 0.08)';
+  ctx.beginPath();
+  ctx.moveTo(from.x, from.y);
+  ctx.lineTo(from.x, from.y - wallH);
+  ctx.lineTo(to.x, to.y - wallH);
+  ctx.lineTo(to.x, to.y);
+  ctx.closePath();
+  ctx.fill();
+
+  // Frame
+  ctx.strokeStyle = 'rgba(140, 200, 250, 0.35)';
+  ctx.lineWidth = 1.5;
+  ctx.beginPath();
+  ctx.moveTo(from.x, from.y);
+  ctx.lineTo(from.x, from.y - wallH);
+  ctx.lineTo(to.x, to.y - wallH);
+  ctx.lineTo(to.x, to.y);
+  ctx.closePath();
+  ctx.stroke();
+
+  // Reflection highlight
+  ctx.strokeStyle = 'rgba(200, 230, 255, 0.15)';
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.moveTo(from.x, from.y - wallH * 0.3);
+  ctx.lineTo(to.x, to.y - wallH * 0.3);
+  ctx.stroke();
+}
+
+// ── Agent definitions (3 zones) ────────────────────────────────
+//
+// EXECUTIVE AREA (back, gy=3):  Strategist, CircuitBreaker
+// ANALYST BULLPEN (middle, gy=6-8): NewsScout, Analyst, Chart, Devil
+// OPS FLOOR (front, gy=10): Risk, Executor, Journal
+//
+const agents = [
+  // Executives
+  { name: 'Strategist', gx: 4,  gy: 2, accessory: 'clipboard',
+    colors: { body: '#e0e0e0', skin: '#e8c49a', legs: '#3a3a3a', hair: '#888888', hat: '#555555' } },
+  { name: 'Circuit',    gx: 11, gy: 2, accessory: 'siren',
+    colors: { body: '#ff6b6b', skin: '#f0c8a0', legs: '#4a2a2a', hair: '#1a0a0a', hat: null } },
+  // Analysts (spread out)
+  { name: 'NewsScout',  gx: 4,  gy: 6, accessory: 'newspaper',
+    colors: { body: '#3fb950', skin: '#f0c8a0', legs: '#2a4a3a', hair: '#4a3520', hat: null } },
+  { name: 'Analyst',    gx: 7,  gy: 6, accessory: 'glasses',
+    colors: { body: '#58a6ff', skin: '#e8c49a', legs: '#2a3a5a', hair: '#2a1a0a', hat: null } },
+  { name: 'Chart',      gx: 10, gy: 6, accessory: 'chart',
+    colors: { body: '#bc8cff', skin: '#f0c8a0', legs: '#3a2a5a', hair: '#1a1a2e', hat: null } },
+  { name: 'Devil',      gx: 7,  gy: 8, accessory: 'horns',
+    colors: { body: '#f85149', skin: '#d4a88c', legs: '#5a2a2a', hair: '#1a0a0a', hat: null } },
+  // Ops
+  { name: 'Risk',       gx: 5,  gy: 10, accessory: 'shield',
+    colors: { body: '#d29922', skin: '#f0c8a0', legs: '#5a4a1a', hair: '#3a2a10', hat: null } },
+  { name: 'Executor',   gx: 7,  gy: 10, accessory: 'bolt',
+    colors: { body: '#f0883e', skin: '#e8c49a', legs: '#5a3a1a', hair: '#2a1a0a', hat: null } },
+  { name: 'Journal',    gx: 9,  gy: 10, accessory: 'book',
+    colors: { body: '#39d2c0', skin: '#f0c8a0', legs: '#1a4a4a', hair: '#4a3520', hat: null } },
+];
+
+// ── Initialize agent runtime state ─────────────────────────────
+agents.forEach(a => {
+  a.homeGx = a.gx;
+  a.homeGy = a.gy;
+  a.renderGx = a.gx;
+  a.renderGy = a.gy;
+  a.state = 'idle';        // idle | walking | interacting | walking_back
+  a.walkPath = [];
+  a.walkIndex = 0;
+  a.walkProgress = 0;
+  a.walkSpeed = 3.0;       // tiles per second
+  a.legPhase = 0;
+  a.idleBob = 0;
+  a.interactTimer = 0;
+  a.pantryTrip = false;
+  a.idleTimer = 0;
+});
+
+// ── Walking system ─────────────────────────────────────────────
+// Door positions (in gap of front glass wall at gy=5)
+const STRAT_DOOR_GX = 3.5;    // left edge of gap gx 3.5–5 (avoids desk at 4.5)
+const CIRCUIT_DOOR_GX = 12;   // right edge of gap gx 10.5–12
+const WALL_GY = 5;            // glass front wall
+const DIVIDER_GX = 8;         // center divider
+
+// Desk positions that agents must avoid when walking vertically
+const DESK_OBSTACLES = [
+  { gx: 4.5, gy: 5.5 }, { gx: 7.5, gy: 5.5 }, { gx: 10.5, gy: 5.5 },
+  { gx: 7.5, gy: 7.5 },
+  { gx: 5.5, gy: 9.5 }, { gx: 7.5, gy: 9.5 }, { gx: 9.5, gy: 9.5 },
+];
+const SAFE_DIST = 0.8;
+// Vertical corridors that are ≥0.8 tiles from all desk centers
+const CORRIDORS = [3, 6.5, 8.5, 13];
+
+function verticalHitsDesk(gx, fromGy, toGy) {
+  const minGy = Math.min(fromGy, toGy);
+  const maxGy = Math.max(fromGy, toGy);
+  return DESK_OBSTACLES.some(d =>
+    d.gy > minGy && d.gy < maxGy && Math.abs(gx - d.gx) < SAFE_DIST
+  );
+}
+
+function nearestCorridor(gx) {
+  let best = CORRIDORS[0];
+  for (const c of CORRIDORS) {
+    if (Math.abs(c - gx) < Math.abs(best - gx)) best = c;
+  }
+  return best;
+}
+
+function calcWalkPath(fromGx, fromGy, toGx, toGy) {
+  const path = [{ gx: fromGx, gy: fromGy }];
+
+  const fromInOffice = fromGy < WALL_GY;
+  const toInOffice = toGy < WALL_GY;
+
+  if (fromInOffice !== toInOffice) {
+    // Must cross glass wall — route through door
+    const insideGx = fromInOffice ? fromGx : toGx;
+    const doorGx = (insideGx < DIVIDER_GX) ? STRAT_DOOR_GX : CIRCUIT_DOOR_GX;
+
+    if (Math.abs(fromGx - doorGx) > 0.1) path.push({ gx: doorGx, gy: fromGy });
+    path.push({ gx: doorGx, gy: toGy });
+    if (Math.abs(toGx - doorGx) > 0.1) path.push({ gx: toGx, gy: toGy });
+
+  } else if (fromInOffice && toInOffice &&
+             (fromGx < DIVIDER_GX) !== (toGx < DIVIDER_GX)) {
+    // Both in offices but different sides — route through doors
+    const fromDoor = (fromGx < DIVIDER_GX) ? STRAT_DOOR_GX : CIRCUIT_DOOR_GX;
+    const toDoor = (toGx < DIVIDER_GX) ? STRAT_DOOR_GX : CIRCUIT_DOOR_GX;
+    path.push({ gx: fromDoor, gy: fromGy });
+    path.push({ gx: fromDoor, gy: WALL_GY + 0.5 });
+    path.push({ gx: toDoor, gy: WALL_GY + 0.5 });
+    path.push({ gx: toDoor, gy: toGy });
+    if (Math.abs(toGx - toDoor) > 0.1) path.push({ gx: toGx, gy: toGy });
+
+  } else if (fromGy !== toGy && verticalHitsDesk(toGx, fromGy, toGy)) {
+    // Vertical segment would cross a desk — route through safe corridor
+    const corridor = nearestCorridor(toGx);
+    if (Math.abs(fromGx - corridor) > 0.1) path.push({ gx: corridor, gy: fromGy });
+    path.push({ gx: corridor, gy: toGy });
+    if (Math.abs(corridor - toGx) > 0.1) path.push({ gx: toGx, gy: toGy });
+
+  } else {
+    // Clear path — simple L-shape
+    if (fromGx !== toGx) path.push({ gx: toGx, gy: fromGy });
+    if (fromGy !== toGy) path.push({ gx: toGx, gy: toGy });
+  }
+
+  return path;
+}
+
+function sendAgentTo(agentName, targetGx, targetGy, pauseDuration) {
+  const agent = agents.find(a => a.name === agentName);
+  if (!agent || agent.state !== 'idle') return false;
+  agent.state = 'walking';
+  agent.walkPath = calcWalkPath(agent.renderGx, agent.renderGy, targetGx, targetGy);
+  agent.walkIndex = 0;
+  agent.walkProgress = 0;
+  agent.interactTimer = pauseDuration || 1.2;
+  return true;
+}
+
+function updateAgentWalk(agent, dt) {
+  if (agent.state === 'idle') {
+    agent.idleBob = Math.sin(animTime * 2.5 + agent.homeGx * 1.3 + agent.homeGy * 0.7) * 0.8;
+    agent.legPhase = 0;
+    return;
+  }
+
+  if (agent.state === 'interacting') {
+    agent.idleBob = 0;
+    agent.legPhase = 0;
+    agent.interactTimer -= dt;
+    if (agent.interactTimer <= 0) {
+      agent.state = 'walking_back';
+      agent.walkPath = calcWalkPath(agent.renderGx, agent.renderGy, agent.homeGx, agent.homeGy);
+      agent.walkIndex = 0;
+      agent.walkProgress = 0;
+    }
+    return;
+  }
+
+  // walking or walking_back
+  agent.idleBob = 0;
+  if (agent.walkIndex >= agent.walkPath.length - 1) {
+    if (agent.state === 'walking') {
+      agent.state = 'interacting';
+    } else {
+      agent.state = 'idle';
+      agent.renderGx = agent.homeGx;
+      agent.renderGy = agent.homeGy;
+      agent.walkSpeed = 3.0; // reset from rush speed
+    }
+    agent.legPhase = 0;
+    return;
+  }
+
+  const from = agent.walkPath[agent.walkIndex];
+  const to = agent.walkPath[agent.walkIndex + 1];
+  const segLen = Math.abs(to.gx - from.gx) + Math.abs(to.gy - from.gy);
+  const speed = agent.walkSpeed / Math.max(segLen, 0.01);
+
+  agent.walkProgress += speed * dt;
+  agent.legPhase += dt * 10;
+
+  if (agent.walkProgress >= 1) {
+    agent.walkProgress = 0;
+    agent.walkIndex++;
+    if (agent.walkIndex >= agent.walkPath.length - 1) {
+      // Snap to destination
+      const dest = agent.walkPath[agent.walkPath.length - 1];
+      agent.renderGx = dest.gx;
+      agent.renderGy = dest.gy;
+    }
+  } else {
+    const t = agent.walkProgress;
+    agent.renderGx = from.gx + (to.gx - from.gx) * t;
+    agent.renderGy = from.gy + (to.gy - from.gy) * t;
+  }
+}
+
+function updateAgents(dt) {
+  agents.forEach(a => updateAgentWalk(a, dt));
+}
+
+// ── Pantry gossip system ────────────────────────────────────────
+const PANTRY_SPOTS = [
+  { gx: 11,   gy: 13 },
+  { gx: 12.5, gy: 13 },
+  { gx: 14,   gy: 13 },
+];
+const PANTRY_AGENTS = ['Risk', 'Executor', 'Journal'];
+
+function recallFromPantry(agentName) {
+  const agent = agents.find(a => a.name === agentName);
+  if (!agent || !agent.pantryTrip) return false;
+  if (agent.state === 'idle' &&
+      Math.abs(agent.renderGx - agent.homeGx) < 0.2 &&
+      Math.abs(agent.renderGy - agent.homeGy) < 0.2) return false;
+  // Rush back!
+  agent.state = 'walking_back';
+  agent.walkPath = calcWalkPath(agent.renderGx, agent.renderGy, agent.homeGx, agent.homeGy);
+  agent.walkIndex = 0;
+  agent.walkProgress = 0;
+  agent.walkSpeed = 5.5;  // rush speed
+  agent.interactTimer = 0;
+  return true;
+}
+
+function updatePantryVisits(dt) {
+  for (const name of PANTRY_AGENTS) {
+    const agent = agents.find(a => a.name === name);
+    if (!agent) continue;
+
+    // When back at desk after pantry trip, clear flag
+    if (agent.pantryTrip && agent.state === 'idle') {
+      if (Math.abs(agent.renderGx - agent.homeGx) < 0.2 &&
+          Math.abs(agent.renderGy - agent.homeGy) < 0.2) {
+        agent.pantryTrip = false;
+        agent.idleTimer = 0;
+        agent.walkSpeed = 3.0;
+      }
+    }
+
+    // Only consider pantry when truly idle at home desk
+    if (agent.state !== 'idle' || agent.pantryTrip) continue;
+
+    agent.idleTimer += dt;
+    const threshold = 6 + Math.abs(Math.sin(agent.homeGx * 2.7)) * 10;
+    if (agent.idleTimer > threshold && Math.random() < 0.008) {
+      const spot = PANTRY_SPOTS[Math.floor(Math.random() * PANTRY_SPOTS.length)];
+      if (sendAgentTo(name, spot.gx, spot.gy, 2.0 + Math.random() * 2.5)) {
+        agent.pantryTrip = true;
+      }
+    }
+  }
+}
+
+// ── Demo sequence ──────────────────────────────────────────────
+const DEMO_STEPS = [
+  { agent: 'NewsScout', target: 'Analyst',    pause: 1.5, label: 'Delivering news briefing' },
+  { agent: 'Analyst',   target: 'Chart',      pause: 1.8, label: 'Checking technicals' },
+  { agent: 'Analyst',   target: 'Devil',      pause: 2.0, label: "Devil's advocate review" },
+  { agent: 'Analyst',   target: 'Risk',       pause: 1.5, label: 'Requesting risk check' },
+  { agent: 'Risk',      target: 'Executor',   pause: 1.0, label: 'Approving trade' },
+  { agent: 'Executor',  target: 'Journal',    pause: 1.2, label: 'Logging trade' },
+  { wait: 4.0 },
+  { agent: 'Analyst',   target: 'Strategist', pause: 2.0, label: 'Strategy consultation' },
+  { wait: 3.0 },
+];
+
+const demo = {
+  stepIndex: 0,
+  phase: 'ready',   // ready | active | waiting
+  waitTimer: 0,
+  label: '',
+  labelAgent: null,
+};
+
+function updateDemo(dt) {
+  const step = DEMO_STEPS[demo.stepIndex];
+
+  if (demo.phase === 'ready') {
+    if (step.wait) {
+      demo.phase = 'waiting';
+      demo.waitTimer = step.wait;
+      demo.label = '';
+      demo.labelAgent = null;
+    } else {
+      // Recall agents from pantry if needed for this step
+      const walker = agents.find(a => a.name === step.agent);
+      if (walker && walker.pantryTrip && walker.state !== 'idle') {
+        recallFromPantry(step.agent);
+        return; // wait for them to rush back
+      }
+      const target = agents.find(a => a.name === step.target);
+      if (target && sendAgentTo(step.agent, target.homeGx, target.homeGy, step.pause)) {
+        demo.phase = 'active';
+        demo.label = step.label || '';
+        demo.labelAgent = step.agent;
+      }
+    }
+  }
+
+  if (demo.phase === 'active') {
+    const agent = agents.find(a => a.name === step.agent);
+    if (agent && agent.state === 'idle') {
+      demo.phase = 'ready';
+      demo.label = '';
+      demo.labelAgent = null;
+      demo.stepIndex = (demo.stepIndex + 1) % DEMO_STEPS.length;
+    }
+  }
+
+  if (demo.phase === 'waiting') {
+    demo.waitTimer -= dt;
+    if (demo.waitTimer <= 0) {
+      demo.phase = 'ready';
+      demo.stepIndex = (demo.stepIndex + 1) % DEMO_STEPS.length;
+    }
+  }
+}
+
+// ── Draw everything ────────────────────────────────────────────
+function draw() {
+  const layout = getLayout();
+  const { W, H, s, titleSpace } = layout;
+
+  // Background
+  const grad = ctx.createLinearGradient(0, 0, 0, H);
+  grad.addColorStop(0, '#1a2030');
+  grad.addColorStop(0.5, '#1e2538');
+  grad.addColorStop(1, '#1a2030');
+  ctx.fillStyle = grad;
+  ctx.fillRect(0, 0, W, H);
+
+  // Title
+  const titleSize = Math.max(13, Math.round(18 * s));
+  ctx.fillStyle = '#8b949e';
+  ctx.font = `bold ${titleSize}px "SF Mono", "Courier New", monospace`;
+  ctx.textAlign = 'center';
+  ctx.fillText('AGENT TRADING FLOOR', W / 2, titleSpace * 0.55);
+  const subSize = Math.max(8, Math.round(10 * s));
+  ctx.fillStyle = '#484f58';
+  ctx.font = `${subSize}px "SF Mono", "Courier New", monospace`;
+  ctx.fillText('9 agents  ·  autonomous trading system', W / 2, titleSpace * 0.55 + titleSize + 4);
+
+  // Floor tiles (brighter) + executive office carpet
+  for (let gx = 0; gx < GRID_SIZE; gx++) {
+    for (let gy = 0; gy < GRID_SIZE; gy++) {
+      const isLight = (gx + gy) % 2 === 0;
+      const inExecOffice = gy <= 4;
+      if (inExecOffice) {
+        drawTile(gx, gy, isLight ? '#3d4560' : '#354058', '#4a5570');
+      } else {
+        drawTile(gx, gy, isLight ? '#384a62' : '#30405a', '#4a5a72');
+      }
+    }
+  }
+
+  // Walls (brighter)
+  const topLeft = isoToScreen(0, 0);
+  const backLeft = isoToScreen(0, GRID_SIZE - 1);
+  const backRight = isoToScreen(GRID_SIZE - 1, 0);
+  const wallH = 45 * s;
+
+  ctx.fillStyle = '#2a3548';
+  ctx.beginPath();
+  ctx.moveTo(topLeft.x, topLeft.y);
+  ctx.lineTo(topLeft.x, topLeft.y - wallH);
+  ctx.lineTo(backLeft.x, backLeft.y - wallH);
+  ctx.lineTo(backLeft.x, backLeft.y);
+  ctx.closePath();
+  ctx.fill();
+  ctx.strokeStyle = '#4a5a72';
+  ctx.lineWidth = 1;
+  ctx.stroke();
+
+  ctx.fillStyle = '#2e3a4e';
+  ctx.beginPath();
+  ctx.moveTo(topLeft.x, topLeft.y);
+  ctx.lineTo(topLeft.x, topLeft.y - wallH);
+  ctx.lineTo(backRight.x, backRight.y - wallH);
+  ctx.lineTo(backRight.x, backRight.y);
+  ctx.closePath();
+  ctx.fill();
+  ctx.strokeStyle = '#4a5a72';
+  ctx.stroke();
+
+  // Massive wall display (right wall, top-left to mid-top)
+  drawWallDisplay();
+
+  // Ticker board (on right wall, near executive area)
+  drawTickerBoard(7.5, 1);
+
+  // ── Glass partitions (executive offices: 8x5 each, shared divider) ──
+  // Strategist front wall with door gap at gx 3.5–5
+  drawGlassPartition(0, 5, 3.5, 5);
+  drawGlassPartition(5, 5, 8, 5);
+  // Circuit front wall with door gap at gx 10.5–12
+  drawGlassPartition(8, 5, 10.5, 5);
+  drawGlassPartition(12, 5, 15, 5);
+  // Center divider (shared wall at gx=8)
+  drawGlassPartition(8, 0, 8, 5);
+
+  // ── Zone labels ──
+  const zoneFontSize = Math.max(7, Math.round(8 * s));
+  ctx.font = `${zoneFontSize}px "SF Mono", "Courier New", monospace`;
+  ctx.textAlign = 'center';
+  ctx.fillStyle = 'rgba(139,148,158,0.4)';
+  const execPos = isoToScreen(7.5, 0.5);
+  ctx.fillText('EXECUTIVE', execPos.x, execPos.y);
+  const analPos = isoToScreen(7, 5.5);
+  ctx.fillText('ANALYST BULLPEN', analPos.x, analPos.y);
+  const opsPos = isoToScreen(7, 9.3);
+  ctx.fillText('OPS FLOOR', opsPos.x, opsPos.y);
+
+  // ── Furniture ──
+  const deskH = 14 * s;
+
+  // Executive long desks (warm mahogany) + 2 large monitors each
+  // Strategist: 4 tiles wide at gy=1
+  drawCube(2, 1, 4, deskH, 1, '#7a6050');
+  drawLargeMonitor(3, 1.3, '#1a3848');
+  drawLargeMonitor(5, 1.3, '#1a3848');
+
+  // Circuit: 4 tiles wide at gy=1
+  drawCube(10, 1, 4, deskH, 1, '#7a6050');
+  drawLargeMonitor(11, 1.3, '#481a28');
+  drawLargeMonitor(13, 1.3, '#481a28');
+
+  // Analyst desks (MEDIUM — 1.0 width/depth, light oak)
+  drawCube(4.5, 5.5, 1.0, deskH, 1.0, '#8a7560');
+  drawMonitor(4.5, 5.5, '#1a4838');
+  drawCube(7.5, 5.5, 1.0, deskH, 1.0, '#8a7560');
+  drawMonitor(7.5, 5.5, '#1a3848');
+  drawCube(10.5, 5.5, 1.0, deskH, 1.0, '#8a7560');
+  drawMonitor(10.5, 5.5, '#3a1a48');
+  drawCube(7.5, 7.5, 1.0, deskH, 1.0, '#8a7560');
+  drawMonitor(7.5, 7.5, '#481a1a');
+
+  // Ops desks (SMALL — 0.7 width/depth, lighter pine)
+  drawCube(5.5, 9.5, 0.7, deskH, 0.7, '#7a6a50');
+  drawMonitor(5.5, 9.5, '#48401a');
+  drawCube(7.5, 9.5, 0.7, deskH, 0.7, '#7a6a50');
+  drawMonitor(7.5, 9.5, '#48381a');
+  drawCube(9.5, 9.5, 0.7, deskH, 0.7, '#7a6a50');
+  drawMonitor(9.5, 9.5, '#1a4842');
+
+  // Chairs (updated positions for new layout)
+  drawChair(4.2, 2.6);   // Strategist
+  drawChair(11.2, 2.6);  // Circuit
+  drawChair(4.2, 6.6);   // NewsScout
+  drawChair(7.2, 6.6);   // Analyst
+  drawChair(10.2, 6.6);  // Chart
+  drawChair(7.2, 8.6);   // Devil
+  drawChair(5.2, 10.6);
+  drawChair(7.2, 10.6);
+  drawChair(9.2, 10.6);
+
+  // ── Pantry (long counter along bottom wall, gx 10→15 at gy=14) ──
+  // Long counter
+  drawCube(10, 14, 5, deskH * 0.7, 1, '#6a5a48');
+  // Coffee machine
+  const coffeePos = isoToScreen(11, 14.3);
+  ctx.fillStyle = '#4a3a30';
+  ctx.fillRect(coffeePos.x - 3 * s, coffeePos.y - deskH * 0.7 - 8 * s, 6 * s, 8 * s);
+  ctx.fillStyle = '#e83030';
+  ctx.fillRect(coffeePos.x - 1 * s, coffeePos.y - deskH * 0.7 - 5 * s, 2 * s, 2 * s);
+  // Sink
+  const sinkPos = isoToScreen(12.5, 14.3);
+  ctx.fillStyle = '#4a4a5a';
+  ctx.fillRect(sinkPos.x - 3 * s, sinkPos.y - deskH * 0.7 - 1 * s, 6 * s, 4 * s);
+  // Water cooler (end of counter)
+  drawWaterCooler(15, 13.5);
+  // Pantry label
+  const pantryLbl = isoToScreen(12.5, 13.5);
+  ctx.fillStyle = 'rgba(139,148,158,0.35)';
+  ctx.font = `${zoneFontSize}px "SF Mono", "Courier New", monospace`;
+  ctx.textAlign = 'center';
+  ctx.fillText('PANTRY', pantryLbl.x, pantryLbl.y - 2 * s);
+
+  // ── Draw agents (depth-sorted by current position) ──
+  const labelQueue = [];
+  const bubbleQueue = [];
+  const sorted = [...agents].sort((a, b) => (a.renderGx + a.renderGy) - (b.renderGx + b.renderGy));
+
+  for (const agent of sorted) {
+    const isSeated = agent.state === 'idle';
+    const pos = drawCharacter(
+      agent.renderGx, agent.renderGy,
+      agent.colors, agent.accessory,
+      agent.legPhase, agent.idleBob, isSeated
+    );
+    labelQueue.push({ name: agent.name, x: pos.x, y: pos.baseY, color: agent.colors.body });
+
+    // Speech bubble for interacting agents
+    if (agent.state === 'interacting') {
+      bubbleQueue.push({ x: pos.x, y: pos.baseY });
+    }
+  }
+
+  // Speech bubbles
+  for (const b of bubbleQueue) {
+    drawSpeechBubble(b.x, b.y);
+  }
+
+  // Labels (always on top)
+  const fontSize = Math.max(8, Math.round(11 * s));
+  ctx.font = `bold ${fontSize}px "SF Mono", "Courier New", monospace`;
+  ctx.textAlign = 'center';
+  for (const lbl of labelQueue) {
+    const ly = lbl.y + 20 * s;
+    const tw = ctx.measureText(lbl.name).width;
+    ctx.fillStyle = 'rgba(26,32,48,0.8)';
+    ctx.fillRect(lbl.x - tw / 2 - 3, ly - fontSize + 1, tw + 6, fontSize + 2);
+    ctx.fillStyle = '#c9d1d9';
+    ctx.fillText(lbl.name, lbl.x, ly);
+  }
+
+  // Floating demo label
+  if (demo.label && demo.labelAgent) {
+    const agent = agents.find(a => a.name === demo.labelAgent);
+    if (agent) {
+      const pos = isoToScreen(agent.renderGx, agent.renderGy);
+      const lfs = Math.max(7, Math.round(9 * s));
+      ctx.font = `${lfs}px "SF Mono", "Courier New", monospace`;
+      const tw = ctx.measureText(demo.label).width;
+      const lx = pos.x;
+      const ly = pos.y - 70 * s;
+      ctx.fillStyle = 'rgba(88,166,255,0.15)';
+      ctx.fillRect(lx - tw / 2 - 4, ly - lfs, tw + 8, lfs + 4);
+      ctx.fillStyle = '#58a6ff';
+      ctx.textAlign = 'center';
+      ctx.fillText(demo.label, lx, ly);
+    }
+  }
+}
+
+// ── Animation loop ─────────────────────────────────────────────
+function animLoop(timestamp) {
+  const dt = lastFrameTime ? (timestamp - lastFrameTime) / 1000 : 0.016;
+  lastFrameTime = timestamp;
+  const cappedDt = Math.min(dt, 0.1);
+  animTime += cappedDt;
+
+  updateAgents(cappedDt);
+  updatePantryVisits(cappedDt);
+  updateDemo(cappedDt);
+  draw();
+
+  requestAnimationFrame(animLoop);
+}
+
+requestAnimationFrame(animLoop);
+</script>
+</body>
+</html>

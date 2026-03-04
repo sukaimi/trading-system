@@ -52,6 +52,13 @@ async def index() -> HTMLResponse:
         return HTMLResponse(content=f.read())
 
 
+@app.get("/agents", response_class=HTMLResponse)
+async def agent_floor() -> HTMLResponse:
+    html_path = os.path.join(DASHBOARD_DIR, "static", "agent-floor.html")
+    with open(html_path) as f:
+        return HTMLResponse(content=f.read())
+
+
 @app.get("/api/portfolio")
 async def get_portfolio() -> dict[str, Any]:
     if _portfolio:
