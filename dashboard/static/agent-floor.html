@@ -64,6 +64,7 @@ const liveData = {
   equityHistory: null,    // [{ timestamp, total_equity }, ...]
   portfolio: null,        // { cash, positions, total_equity, ... }
   prevMarket: null,       // previous prices for change calculation
+  scheduler: null,        // [{ name, interval, unit, at_time, next_run }, ...]
   connected: false,
   lastFetch: 0,
   wsConnected: false,
@@ -73,11 +74,12 @@ const LIVE_POLL_INTERVAL = 30000; // 30s
 
 async function fetchLiveData() {
   try {
-    const [mkt, hist, equity, port] = await Promise.all([
+    const [mkt, hist, equity, port, sched] = await Promise.all([
       fetch('/api/market').then(r => r.ok ? r.json() : null).catch(() => null),
       fetch('/api/price-history').then(r => r.ok ? r.json() : null).catch(() => null),
       fetch('/api/equity-history').then(r => r.ok ? r.json() : null).catch(() => null),
       fetch('/api/portfolio').then(r => r.ok ? r.json() : null).catch(() => null),
+      fetch('/api/scheduler').then(r => r.ok ? r.json() : null).catch(() => null),
     ]);
     if (mkt && Object.keys(mkt).length > 0) {
       // Normalize: API returns {BTC: {price: 87241, ...}} — flatten to {BTC: 87241}
@@ -92,6 +94,7 @@ async function fetchLiveData() {
     if (hist) liveData.priceHistory = hist;
     if (equity) liveData.equityHistory = equity;
     if (port) liveData.portfolio = port;
+    if (sched) liveData.scheduler = sched;
     liveData.lastFetch = Date.now();
   } catch (e) {
     // Silently fail — static fallback will be used
@@ -425,17 +428,16 @@ function drawPlant(gx, gy) {
 function drawTickerBoard() {
   const { s } = getLayout();
 
-  // Left wall runs along gx=0, from gy=0 to gy=5
-  // Parallelogram follows wall slope; content is flipped to face room interior
-  const pL = isoToScreen(0, 0);
-  const pR = isoToScreen(0, 5);
+  // Left wall: gx=0, gy 5→13 (swapped with clocks — more space for 6 tickers)
+  const pL = isoToScreen(0, 5);
+  const pR = isoToScreen(0, 13);
   const wallDx = pR.x - pL.x;
   const wallDy = pR.y - pL.y;
   const wallLen = Math.sqrt(wallDx * wallDx + wallDy * wallDy);
   const ux = wallDx / wallLen;
   const uy = wallDy / wallLen;
 
-  const scrH = 70 * s;
+  const scrH = 160 * s;
   const mountBot = 24 * s;
 
   const bl = { x: pL.x, y: pL.y - mountBot };
@@ -480,10 +482,10 @@ function drawTickerBoard() {
   }
 
   // Title
-  const titleFs = Math.max(6, Math.round(9 * s));
+  const titleFs = Math.max(8, Math.round(12 * s));
   ctx.font = `bold ${titleFs}px "SF Mono", "Courier New", monospace`;
   ctx.fillStyle = '#5a7a90';
-  wallText('LIVE MARKETS', 0.04, 0.90);
+  wallText('LIVE MARKETS', 0.04, 0.92);
 
   // Tickers — 2 rows x 3 columns (live data with static fallback)
   const TICKER_SYMBOLS = ['BTC', 'ETH', 'SPY', 'GLDM', 'NVDA', 'AAPL'];
@@ -492,7 +494,6 @@ function drawTickerBoard() {
     const price = (liveData.market && liveData.market[sym]) || STATIC_PRICES[sym];
     const prev = (liveData.prevMarket && liveData.prevMarket[sym]) || null;
     const chgInfo = prev ? fmtChange(price, prev) : { text: '—', color: '#8b949e' };
-    // Use price history for change if no previous market snapshot
     if (!prev && liveData.priceHistory && liveData.priceHistory[sym] && liveData.priceHistory[sym].length >= 2) {
       const hist = liveData.priceHistory[sym];
       const oldP = hist[0], newP = hist[hist.length - 1];
@@ -502,8 +503,8 @@ function drawTickerBoard() {
     }
     return { sym, val: fmtPrice(price), chg: chgInfo.text, color: chgInfo.color };
   });
-  const symFs = Math.max(6, Math.round(9.5 * s));
-  const valFs = Math.max(5, Math.round(8 * s));
+  const symFs = Math.max(8, Math.round(13 * s));
+  const valFs = Math.max(7, Math.round(11 * s));
   const cols = 3;
   const colW = 0.88 / cols;
 
@@ -511,7 +512,7 @@ function drawTickerBoard() {
     const col = i % cols;
     const row = Math.floor(i / cols);
     const nx = 0.06 + col * colW;
-    const ny = row === 0 ? 0.65 : 0.28;
+    const ny = row === 0 ? 0.68 : 0.32;
 
     ctx.font = `bold ${symFs}px "SF Mono", "Courier New", monospace`;
     ctx.fillStyle = '#c9d1d9';
@@ -519,8 +520,159 @@ function drawTickerBoard() {
 
     ctx.font = `${valFs}px "SF Mono", "Courier New", monospace`;
     ctx.fillStyle = t.color;
-    wallText('$' + t.val + '  ' + t.chg, nx, ny - 0.14);
+    wallText('$' + t.val + '  ' + t.chg, nx, ny - 0.12);
   });
+}
+
+// ── Scheduler countdown clocks (left wall, pyramid below ticker) ─────
+const CLOCK_TASKS = [
+  { key: 'heartbeat',          label: 'HB' },
+  { key: 'news_scan',          label: 'NEWS' },
+  { key: 'asian_open',         label: 'ASIA' },
+  { key: 'european_overlap',   label: 'EURO' },
+  { key: 'us_close',           label: 'US' },
+];
+
+function getCountdown(task) {
+  if (!task || !task.next_run) {
+    return { text: '--:--', fraction: 1, remaining: Infinity };
+  }
+  const now = Date.now();
+  const nextRun = new Date(task.next_run).getTime();
+  const remaining = Math.max(0, nextRun - now);
+
+  // Cycle duration from scheduler data
+  let cycleMs;
+  if (task.unit === 'minutes') cycleMs = task.interval * 60000;
+  else if (task.unit === 'hours') cycleMs = task.interval * 3600000;
+  else cycleMs = 86400000; // days/weeks default to 24h
+
+  // fraction: 1 = just fired (full pie), 0 = about to fire (empty)
+  const fraction = Math.min(1, remaining / cycleMs);
+
+  const totalMins = Math.floor(remaining / 60000);
+  const h = Math.floor(totalMins / 60);
+  const m = totalMins % 60;
+  const secs = Math.floor((remaining % 60000) / 1000);
+  const text = h > 0 ? `${h}h ${m}m` : `${m}m ${secs}s`;
+  return { text, fraction, remaining };
+}
+
+function drawSchedulerClocks() {
+  const { s } = getLayout();
+
+  // Left wall: gx=0, gy 0→5 (swapped with ticker — compact clock area)
+  const pL = isoToScreen(0, 0);
+  const pR = isoToScreen(0, 5);
+  const wallDx = pR.x - pL.x;
+  const wallDy = pR.y - pL.y;
+  const wallLen = Math.sqrt(wallDx * wallDx + wallDy * wallDy);
+  const ux = wallDx / wallLen;
+  const uy = wallDy / wallLen;
+
+  const scrH = 130 * s;
+  const mountBot = 24 * s;
+  const br = { x: pR.x, y: pR.y - mountBot };
+
+  // Content position: flipped for left wall (reads gy=10 → gy=5.5)
+  function sPos(nx, ny) {
+    return { x: br.x - nx * wallDx, y: br.y - nx * wallDy - ny * scrH };
+  }
+
+  // Isometric text (faces room interior)
+  function wallText(text, nx, ny, align) {
+    const p = sPos(nx, ny);
+    ctx.save();
+    ctx.translate(p.x, p.y);
+    ctx.transform(-ux, -uy, 0, 1, 0, 0);
+    ctx.textAlign = align || 'center';
+    ctx.fillText(text, 0, 0);
+    ctx.restore();
+  }
+
+  // Pyramid positions: centered on wall (nx=0.50, ny=0.50)
+  const positions = [
+    // Bottom row: ASIA, EURO, US (gap 0.22, centered)
+    { nx: 0.28, ny: 0.32, idx: 2 },
+    { nx: 0.50, ny: 0.32, idx: 3 },
+    { nx: 0.72, ny: 0.32, idx: 4 },
+    // Top row: HB, NEWS (gap 0.22, centered)
+    { nx: 0.39, ny: 0.68, idx: 0 },
+    { nx: 0.61, ny: 0.68, idx: 1 },
+  ];
+
+  const r = Math.max(12, 20 * s);
+  const labelFs = Math.max(6, Math.round(8 * s));
+
+  for (const pos of positions) {
+    const clock = CLOCK_TASKS[pos.idx];
+    const task = liveData.scheduler
+      ? liveData.scheduler.find(t => t.name && t.name.includes(clock.key))
+      : null;
+    const cd = getCountdown(task);
+
+    const center = sPos(pos.nx, pos.ny);
+
+    ctx.save();
+    ctx.translate(center.x, center.y);
+    ctx.transform(-ux, -uy, 0, 1, 0, 0);
+
+    // Dark background circle
+    ctx.beginPath();
+    ctx.arc(0, 0, r, 0, Math.PI * 2);
+    ctx.fillStyle = '#0d1117';
+    ctx.fill();
+
+    // Pie wedge — remaining fraction depletes clockwise from 12 o'clock
+    if (cd.fraction > 0.001) {
+      const startAngle = -Math.PI / 2;
+      const endAngle = startAngle + cd.fraction * Math.PI * 2;
+
+      // Pick color: blue → amber → red as time runs out
+      let pieColor;
+      if (cd.remaining < 60000) pieColor = '#f85149';       // < 1 min: red
+      else if (cd.fraction < 0.10) pieColor = '#d29922';    // < 10%: amber
+      else pieColor = '#1f6feb';                             // normal: blue
+
+      ctx.beginPath();
+      ctx.moveTo(0, 0);
+      ctx.arc(0, 0, r * 0.88, startAngle, endAngle);
+      ctx.closePath();
+      ctx.fillStyle = pieColor;
+      ctx.globalAlpha = 0.7;
+      ctx.fill();
+      ctx.globalAlpha = 1.0;
+    }
+
+    // Outer ring border
+    ctx.beginPath();
+    ctx.arc(0, 0, r, 0, Math.PI * 2);
+    ctx.strokeStyle = '#30363d';
+    ctx.lineWidth = Math.max(1.5, 2 * s);
+    ctx.stroke();
+
+    // Thin inner ring for depth
+    ctx.beginPath();
+    ctx.arc(0, 0, r * 0.88, 0, Math.PI * 2);
+    ctx.strokeStyle = 'rgba(255,255,255,0.06)';
+    ctx.lineWidth = 0.8;
+    ctx.stroke();
+
+    // Countdown text centered inside the pie
+    const innerFs = Math.max(7, Math.round(r * 0.36));
+    ctx.font = `bold ${innerFs}px "SF Mono", "Courier New", monospace`;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillStyle = cd.remaining < 60000 ? '#f85149' : '#c9d1d9';
+    ctx.fillText(cd.text, 0, 0);
+
+    ctx.restore();
+
+    // Label below the pie
+    ctx.font = `bold ${labelFs}px "SF Mono", "Courier New", monospace`;
+    ctx.fillStyle = '#8b949e';
+    wallText(clock.label, pos.nx, pos.ny - 0.10);
+  }
 }
 
 // ── Draw massive wall display (right wall, upright like glass panels) ─
@@ -536,7 +688,7 @@ function drawWallDisplay() {
   const ux = wallDx / wallLen;
   const uy = wallDy / wallLen;
 
-  const scrH = 70 * s;
+  const scrH = 130 * s;
   const mountBot = 24 * s;
 
   // Parallelogram: bottom follows wall, sides go straight up
@@ -589,11 +741,11 @@ function drawWallDisplay() {
   }
 
   // ── Left: Equity curve (58%) ──
-  const lblFs = Math.max(6, Math.round(8.5 * s));
+  const lblFs = Math.max(8, Math.round(12 * s));
 
   ctx.font = `bold ${lblFs}px "SF Mono", "Courier New", monospace`;
   ctx.fillStyle = '#5a7a90';
-  wallText('PORTFOLIO EQUITY', 0.03, 0.92);
+  wallText('PORTFOLIO EQUITY', 0.03, 0.93);
 
   // Grid lines
   ctx.strokeStyle = 'rgba(100,160,220,0.08)';
@@ -662,10 +814,10 @@ function drawWallDisplay() {
   if (hasLiveEquity) {
     const lastVal = eqHist[eqHist.length - 1];
     const eqVal = lastVal.total_equity || lastVal.equity || lastVal.value || 0;
-    const eqFs = Math.max(5, Math.round(7.5 * s));
+    const eqFs = Math.max(7, Math.round(11 * s));
     ctx.font = `bold ${eqFs}px "SF Mono", "Courier New", monospace`;
     ctx.fillStyle = '#c9d1d9';
-    wallText('$' + fmtPrice(eqVal), 0.03, 0.80);
+    wallText('$' + fmtPrice(eqVal), 0.03, 0.82);
   }
 
   // ── Divider ──
@@ -681,7 +833,7 @@ function drawWallDisplay() {
   // ── Right: Top 3 markets (38%) ──
   ctx.font = `bold ${lblFs}px "SF Mono", "Courier New", monospace`;
   ctx.fillStyle = '#5a7a90';
-  wallText('TOP MARKETS', 0.62, 0.92);
+  wallText('TOP MARKETS', 0.62, 0.93);
 
   const MKT_SYMBOLS = ['BTC', 'ETH', 'SPY'];
   const MKT_STATIC = { BTC: 87241, ETH: 2148, SPY: 512.3 };
@@ -695,11 +847,11 @@ function drawWallDisplay() {
     }
     return { sym, price: fmtPrice(price), chg: chgInfo.text, color: chgInfo.color };
   });
-  const symFs = Math.max(6, Math.round(10 * s));
-  const valFs = Math.max(5, Math.round(8.5 * s));
+  const symFs = Math.max(8, Math.round(13 * s));
+  const valFs = Math.max(7, Math.round(11 * s));
 
   markets.forEach((mk, i) => {
-    const ny = 0.72 - i * 0.24;
+    const ny = 0.75 - i * 0.22;
 
     ctx.font = `bold ${symFs}px "SF Mono", "Courier New", monospace`;
     ctx.fillStyle = '#c9d1d9';
@@ -707,7 +859,7 @@ function drawWallDisplay() {
 
     ctx.font = `${valFs}px "SF Mono", "Courier New", monospace`;
     ctx.fillStyle = '#8b949e';
-    wallText('$' + mk.price, 0.62, ny - 0.08);
+    wallText('$' + mk.price, 0.62, ny - 0.07);
 
     ctx.fillStyle = mk.color;
     wallText(mk.chg, 0.96, ny, 'right');
@@ -716,7 +868,7 @@ function drawWallDisplay() {
     const sparkData = liveData.priceHistory && liveData.priceHistory[mk.sym];
     const hasSparkData = sparkData && sparkData.length >= 2;
     ctx.strokeStyle = mk.color;
-    ctx.lineWidth = 0.8 * s;
+    ctx.lineWidth = 1.0 * s;
     ctx.beginPath();
     if (hasSparkData) {
       const minV = Math.min(...sparkData), maxV = Math.max(...sparkData);
@@ -725,14 +877,14 @@ function drawWallDisplay() {
       for (let j = 0; j < Math.min(9, sparkData.length); j++) {
         const idx = Math.min(j * step, sparkData.length - 1);
         const sv = (sparkData[idx] - minV) / rng;
-        const sp = sPos(0.82 + (j / 8) * 0.14, ny - 0.02 + sv * 0.06);
+        const sp = sPos(0.82 + (j / 8) * 0.14, ny - 0.02 + sv * 0.05);
         j === 0 ? ctx.moveTo(sp.x, sp.y) : ctx.lineTo(sp.x, sp.y);
       }
     } else {
       for (let j = 0; j <= 8; j++) {
         const st = j / 8;
         const sv = Math.sin(st * 5 + i * 2 + animTime * 0.3) * 0.5 + 0.5;
-        const sp = sPos(0.82 + st * 0.14, ny - 0.02 + sv * 0.06);
+        const sp = sPos(0.82 + st * 0.14, ny - 0.02 + sv * 0.05);
         j === 0 ? ctx.moveTo(sp.x, sp.y) : ctx.lineTo(sp.x, sp.y);
       }
     }
@@ -1618,6 +1770,9 @@ function draw() {
 
   // Ticker board (left wall, Strat's office)
   drawTickerBoard();
+
+  // Scheduler countdown clocks (left wall, below ticker)
+  drawSchedulerClocks();
 
   // ── Glass partitions (executive offices: 8x5 each, shared divider) ──
   // Strategist front wall with door gap at gx 3.5–5
