@@ -26,7 +26,7 @@ canvas {
     left: 50%;
     transform: translateX(-50%);
     color: #484f58;
-    font: 12px "SF Mono", monospace;
+    font: 13px "SF Mono", monospace;
     z-index: 10;
     background: rgba(26,32,48,0.85);
     padding: 6px 14px;
@@ -57,6 +57,146 @@ window.addEventListener('resize', resize);
 let animTime = 0;
 let lastFrameTime = 0;
 
+// ── Live data layer (connects to existing backend APIs) ────────
+const liveData = {
+  market: null,           // { BTC: 87241, ETH: 2148, ... }
+  priceHistory: null,     // { BTC: [p1,p2,...], ETH: [...], ... }
+  equityHistory: null,    // [{ timestamp, total_equity }, ...]
+  portfolio: null,        // { cash, positions, total_equity, ... }
+  prevMarket: null,       // previous prices for change calculation
+  connected: false,
+  lastFetch: 0,
+  wsConnected: false,
+};
+
+const LIVE_POLL_INTERVAL = 30000; // 30s
+
+async function fetchLiveData() {
+  try {
+    const [mkt, hist, equity, port] = await Promise.all([
+      fetch('/api/market').then(r => r.ok ? r.json() : null).catch(() => null),
+      fetch('/api/price-history').then(r => r.ok ? r.json() : null).catch(() => null),
+      fetch('/api/equity-history').then(r => r.ok ? r.json() : null).catch(() => null),
+      fetch('/api/portfolio').then(r => r.ok ? r.json() : null).catch(() => null),
+    ]);
+    if (mkt && Object.keys(mkt).length > 0) {
+      // Normalize: API returns {BTC: {price: 87241, ...}} — flatten to {BTC: 87241}
+      const flat = {};
+      for (const [sym, val] of Object.entries(mkt)) {
+        flat[sym] = (val && typeof val === 'object') ? (val.price || 0) : (val || 0);
+      }
+      if (liveData.market) liveData.prevMarket = { ...liveData.market };
+      liveData.market = flat;
+      liveData.connected = true;
+    }
+    if (hist) liveData.priceHistory = hist;
+    if (equity) liveData.equityHistory = equity;
+    if (port) liveData.portfolio = port;
+    liveData.lastFetch = Date.now();
+  } catch (e) {
+    // Silently fail — static fallback will be used
+  }
+}
+
+// WebSocket for real-time pipeline events → agent animations
+let _eventWs = null;
+const _eventQueue = [];
+
+function connectEventWS() {
+  const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+  const url = `${proto}//${location.host}/ws`;
+  try {
+    _eventWs = new WebSocket(url);
+    _eventWs.onopen = () => { liveData.wsConnected = true; };
+    _eventWs.onclose = () => {
+      liveData.wsConnected = false;
+      setTimeout(connectEventWS, 5000); // reconnect
+    };
+    _eventWs.onerror = () => { liveData.wsConnected = false; };
+    _eventWs.onmessage = (e) => {
+      try {
+        const event = JSON.parse(e.data);
+        _eventQueue.push(event);
+      } catch (_) {}
+    };
+  } catch (_) {
+    setTimeout(connectEventWS, 5000);
+  }
+}
+
+// Map pipeline events to agent walking animations
+const EVENT_TO_ANIMATION = {
+  'pipeline:news_scan_complete':         { agent: 'NewsScout', target: 'Analyst',    pause: 1.5, label: 'Delivering news briefing' },
+  'pipeline:thesis_generated':           { agent: 'Analyst',   target: 'Chart',      pause: 1.8, label: 'Checking technicals' },
+  'pipeline:chart_analysis':             { agent: 'Analyst',   target: 'Devil',      pause: 2.0, label: "Devil's advocate review" },
+  'pipeline:devil_verdict':              { agent: 'Analyst',   target: 'Risk',       pause: 1.5, label: 'Requesting risk check' },
+  'pipeline:risk_check':                 { agent: 'Risk',      target: 'Executor',   pause: 1.0, label: 'Approving trade' },
+  'pipeline:trade_executed':             { agent: 'Executor',  target: 'Journal',    pause: 1.2, label: 'Logging trade' },
+  'pipeline:scheduled_analysis_start':   { agent: 'Analyst',   target: 'Strategist', pause: 2.0, label: 'Strategy consultation' },
+  'circuit_breaker:triggered':           { agent: 'Circuit',   target: 'Strategist', pause: 3.0, label: 'CIRCUIT BREAKER!' },
+};
+
+let liveMode = false;
+let lastLiveEventTime = 0;
+const LIVE_MODE_TIMEOUT = 30000; // revert to demo after 30s of no events
+
+function processLiveEvents() {
+  while (_eventQueue.length > 0) {
+    const event = _eventQueue.shift();
+    const key = `${event.category}:${event.event_type}`;
+    const anim = EVENT_TO_ANIMATION[key];
+    if (anim) {
+      liveMode = true;
+      lastLiveEventTime = Date.now();
+      const target = agents.find(a => a.name === anim.target);
+      if (target) {
+        const walker = agents.find(a => a.name === anim.agent);
+        if (walker && walker.pantryTrip && walker.state !== 'idle') {
+          recallFromPantry(anim.agent);
+        }
+        if (sendAgentTo(anim.agent, target.homeGx, target.homeGy, anim.pause)) {
+          demo.label = anim.label;
+          demo.labelAgent = anim.agent;
+          setTimeout(() => {
+            if (demo.labelAgent === anim.agent) {
+              demo.label = '';
+              demo.labelAgent = null;
+            }
+          }, (anim.pause + 4) * 1000);
+        }
+      }
+    }
+  }
+  // Revert to demo mode after timeout with no live events
+  if (liveMode && Date.now() - lastLiveEventTime > LIVE_MODE_TIMEOUT) {
+    const anyBusy = agents.some(a => !a.npc && a.state !== 'idle');
+    if (!anyBusy) liveMode = false;
+  }
+}
+
+// Helper: format price for display
+function fmtPrice(val) {
+  if (val == null || val === 0) return '—';
+  if (val >= 1000) return val.toLocaleString('en-US', { maximumFractionDigits: 0 });
+  if (val >= 10) return val.toFixed(1);
+  return val.toFixed(2);
+}
+
+function fmtChange(cur, prev) {
+  if (!cur || !prev || prev === 0) return { text: '—', color: '#8b949e' };
+  const pct = ((cur - prev) / prev * 100);
+  const sign = pct >= 0 ? '+' : '';
+  return {
+    text: sign + pct.toFixed(1) + '%',
+    color: pct >= 0 ? '#3fb950' : '#f85149',
+  };
+}
+
+// Boot: initial fetch + WebSocket connection + polling
+fetchLiveData();
+connectEventWS();
+setInterval(fetchLiveData, LIVE_POLL_INTERVAL);
+
 // ── Responsive scale ───────────────────────────────────────────
 const GRID_SIZE = 16;
 
@@ -69,7 +209,7 @@ function getLayout() {
   const tileFromW = (W - padding * 2) / (GRID_SIZE - 1);
   const usableH = H - titleSpace - padding * 0.5;
   const tileFromH = usableH / ((GRID_SIZE - 1) + 3);
-  const tileH = Math.min(tileFromW / 2, tileFromH, 32);
+  const tileH = Math.min(tileFromW / 2, tileFromH, 42);
   const tileW = tileH * 2;
   const s = tileW / 64;
   const diamondH = (GRID_SIZE - 1) * tileH;
@@ -213,6 +353,52 @@ function drawChair(gx, gy) {
   ctx.fill();
 }
 
+// ── Draw executive chair (large, black, high-back) ────────────
+function drawExecChair(gx, gy) {
+  const { x, y } = isoToScreen(gx, gy);
+  const { s } = getLayout();
+  // 5-star base
+  ctx.fillStyle = '#333';
+  ctx.beginPath();
+  ctx.arc(x - 6 * s, y + 2 * s, 1.5 * s, 0, Math.PI * 2);
+  ctx.arc(x + 6 * s, y + 2 * s, 1.5 * s, 0, Math.PI * 2);
+  ctx.arc(x, y + 4 * s, 1.5 * s, 0, Math.PI * 2);
+  ctx.arc(x - 4 * s, y + 4 * s, 1.2 * s, 0, Math.PI * 2);
+  ctx.arc(x + 4 * s, y + 4 * s, 1.2 * s, 0, Math.PI * 2);
+  ctx.fill();
+  // Hydraulic post
+  ctx.fillStyle = '#555';
+  ctx.fillRect(x - 1.5 * s, y - 6 * s, 3 * s, 8 * s);
+  // Seat (wide, padded)
+  ctx.fillStyle = '#1a1a1a';
+  ctx.fillRect(x - 8 * s, y - 10 * s, 16 * s, 5 * s);
+  ctx.fillStyle = '#222';
+  ctx.fillRect(x - 7 * s, y - 9 * s, 14 * s, 3 * s);
+  // High back
+  ctx.fillStyle = '#111';
+  ctx.fillRect(x - 7 * s, y - 28 * s, 14 * s, 18 * s);
+  // Leather padding (subtle highlight)
+  ctx.fillStyle = '#1a1a1a';
+  ctx.fillRect(x - 6 * s, y - 27 * s, 12 * s, 16 * s);
+  // Tufted lines
+  ctx.fillStyle = '#0d0d0d';
+  ctx.fillRect(x - 5 * s, y - 22 * s, 10 * s, 0.8 * s);
+  ctx.fillRect(x - 5 * s, y - 17 * s, 10 * s, 0.8 * s);
+  // Headrest
+  ctx.fillStyle = '#151515';
+  ctx.fillRect(x - 5 * s, y - 30 * s, 10 * s, 3 * s);
+  ctx.fillStyle = '#1c1c1c';
+  ctx.fillRect(x - 4 * s, y - 29 * s, 8 * s, 1.5 * s);
+  // Armrests
+  ctx.fillStyle = '#222';
+  ctx.fillRect(x - 9 * s, y - 14 * s, 3 * s, 6 * s);
+  ctx.fillRect(x + 6 * s, y - 14 * s, 3 * s, 6 * s);
+  // Armrest tops (padded)
+  ctx.fillStyle = '#1a1a1a';
+  ctx.fillRect(x - 10 * s, y - 15 * s, 4 * s, 2 * s);
+  ctx.fillRect(x + 6 * s, y - 15 * s, 4 * s, 2 * s);
+}
+
 // ── Draw a potted plant ────────────────────────────────────────
 function drawPlant(gx, gy) {
   const { x, y } = isoToScreen(gx, gy);
@@ -235,200 +421,360 @@ function drawPlant(gx, gy) {
   ctx.fillRect(x - 0.5 * s, y - 16 * s, 1 * s, 6 * s);
 }
 
-// ── Draw a wall ticker board ───────────────────────────────────
-function drawTickerBoard(gx, gy) {
-  const { x, y } = isoToScreen(gx, gy);
+// ── Draw a wall ticker board (left wall, Strat's office, gy 0.5–4.5) ──
+function drawTickerBoard() {
   const { s } = getLayout();
-  const boardW = 50 * s;
-  const boardH = 18 * s;
-  ctx.fillStyle = '#2a3050';
-  ctx.fillRect(x - boardW / 2, y - 48 * s, boardW, boardH);
-  ctx.strokeStyle = '#4a5570';
-  ctx.lineWidth = 1 * s;
-  ctx.strokeRect(x - boardW / 2, y - 48 * s, boardW, boardH);
+
+  // Left wall runs along gx=0, from gy=0 to gy=5
+  // Parallelogram follows wall slope; content is flipped to face room interior
+  const pL = isoToScreen(0, 0);
+  const pR = isoToScreen(0, 5);
+  const wallDx = pR.x - pL.x;
+  const wallDy = pR.y - pL.y;
+  const wallLen = Math.sqrt(wallDx * wallDx + wallDy * wallDy);
+  const ux = wallDx / wallLen;
+  const uy = wallDy / wallLen;
+
+  const scrH = 70 * s;
+  const mountBot = 24 * s;
+
+  const bl = { x: pL.x, y: pL.y - mountBot };
+  const br = { x: pR.x, y: pR.y - mountBot };
+  const tl = { x: pL.x, y: pL.y - mountBot - scrH };
+  const tr = { x: pR.x, y: pR.y - mountBot - scrH };
+
+  // Board background
   ctx.fillStyle = '#1a2238';
-  ctx.fillRect(x - boardW / 2 + 2 * s, y - 46 * s, boardW - 4 * s, boardH - 4 * s);
-  const tickers = [
-    { sym: 'BTC', color: '#3fb950', val: '87,241' },
-    { sym: 'ETH', color: '#f85149', val: '2,148' },
-    { sym: 'SPY', color: '#3fb950', val: '512' },
-  ];
-  const fontSize = Math.max(5, Math.round(6 * s));
-  ctx.font = `bold ${fontSize}px "SF Mono", "Courier New", monospace`;
-  const startX = x - boardW / 2 + 5 * s;
-  const spacing = (boardW - 10 * s) / tickers.length;
+  ctx.beginPath();
+  ctx.moveTo(tl.x, tl.y); ctx.lineTo(tr.x, tr.y);
+  ctx.lineTo(br.x, br.y); ctx.lineTo(bl.x, bl.y);
+  ctx.closePath(); ctx.fill();
+  ctx.strokeStyle = '#3a4a64';
+  ctx.lineWidth = 1.5;
+  ctx.stroke();
+
+  // Inner screen
+  const m = 2 * s;
+  ctx.fillStyle = '#0c1220';
+  ctx.beginPath();
+  ctx.moveTo(tl.x + ux * m, tl.y + uy * m + m);
+  ctx.lineTo(tr.x - ux * m, tr.y - uy * m + m);
+  ctx.lineTo(br.x - ux * m, br.y - uy * m - m);
+  ctx.lineTo(bl.x + ux * m, bl.y + uy * m - m);
+  ctx.closePath(); ctx.fill();
+
+  // Content position: nx=0 starts at gy=5 end (br), reads toward gy=0 (bl)
+  function sPos(nx, ny) {
+    return { x: br.x - nx * wallDx, y: br.y - nx * wallDy - ny * scrH };
+  }
+
+  // Text sheared opposite to wall direction so it faces the room interior
+  function wallText(text, nx, ny, align) {
+    const p = sPos(nx, ny);
+    ctx.save();
+    ctx.translate(p.x, p.y);
+    ctx.transform(-ux, -uy, 0, 1, 0, 0);
+    ctx.textAlign = align || 'left';
+    ctx.fillText(text, 0, 0);
+    ctx.restore();
+  }
+
+  // Title
+  const titleFs = Math.max(6, Math.round(9 * s));
+  ctx.font = `bold ${titleFs}px "SF Mono", "Courier New", monospace`;
+  ctx.fillStyle = '#5a7a90';
+  wallText('LIVE MARKETS', 0.04, 0.90);
+
+  // Tickers — 2 rows x 3 columns (live data with static fallback)
+  const TICKER_SYMBOLS = ['BTC', 'ETH', 'SPY', 'GLDM', 'NVDA', 'AAPL'];
+  const STATIC_PRICES = { BTC: 87241, ETH: 2148, SPY: 512.3, GLDM: 45.20, NVDA: 892.1, AAPL: 178.4 };
+  const tickers = TICKER_SYMBOLS.map(sym => {
+    const price = (liveData.market && liveData.market[sym]) || STATIC_PRICES[sym];
+    const prev = (liveData.prevMarket && liveData.prevMarket[sym]) || null;
+    const chgInfo = prev ? fmtChange(price, prev) : { text: '—', color: '#8b949e' };
+    // Use price history for change if no previous market snapshot
+    if (!prev && liveData.priceHistory && liveData.priceHistory[sym] && liveData.priceHistory[sym].length >= 2) {
+      const hist = liveData.priceHistory[sym];
+      const oldP = hist[0], newP = hist[hist.length - 1];
+      const ci = fmtChange(newP, oldP);
+      chgInfo.text = ci.text;
+      chgInfo.color = ci.color;
+    }
+    return { sym, val: fmtPrice(price), chg: chgInfo.text, color: chgInfo.color };
+  });
+  const symFs = Math.max(6, Math.round(9.5 * s));
+  const valFs = Math.max(5, Math.round(8 * s));
+  const cols = 3;
+  const colW = 0.88 / cols;
+
   tickers.forEach((t, i) => {
-    const tx = startX + i * spacing;
-    ctx.fillStyle = '#8b949e';
-    ctx.textAlign = 'left';
-    ctx.fillText(t.sym, tx, y - 42 * s);
+    const col = i % cols;
+    const row = Math.floor(i / cols);
+    const nx = 0.06 + col * colW;
+    const ny = row === 0 ? 0.65 : 0.28;
+
+    ctx.font = `bold ${symFs}px "SF Mono", "Courier New", monospace`;
+    ctx.fillStyle = '#c9d1d9';
+    wallText(t.sym, nx, ny);
+
+    ctx.font = `${valFs}px "SF Mono", "Courier New", monospace`;
     ctx.fillStyle = t.color;
-    ctx.fillText(t.val, tx, y - 36 * s);
+    wallText('$' + t.val + '  ' + t.chg, nx, ny - 0.14);
   });
 }
 
-// ── Draw massive wall display (right wall) ────────────────────
+// ── Draw massive wall display (right wall, upright like glass panels) ─
 function drawWallDisplay() {
-  const { s, tileW, tileH } = getLayout();
+  const { s } = getLayout();
 
-  // Screen spans gx 0.5–7.5 on right wall (gy=0): top-left to mid-top
+  // Screen spans gx 0.5–7.5 on right wall (gy=0)
   const pL = isoToScreen(0.5, 0);
   const pR = isoToScreen(7.5, 0);
-  const dx = pR.x - pL.x;
-  const dy = pR.y - pL.y;
-  const wallLen = Math.sqrt(dx * dx + dy * dy);
-  const wallAngle = Math.atan2(dy, dx);
+  const wallDx = pR.x - pL.x;
+  const wallDy = pR.y - pL.y;
+  const wallLen = Math.sqrt(wallDx * wallDx + wallDy * wallDy);
+  const ux = wallDx / wallLen;
+  const uy = wallDy / wallLen;
 
-  const scrW = wallLen * 0.92;
-  const scrH = 28 * s;
+  const scrH = 70 * s;
+  const mountBot = 24 * s;
 
-  // Center of screen, raised on wall
-  const cx = (pL.x + pR.x) / 2;
-  const cy = (pL.y + pR.y) / 2 - 30 * s;
-
-  ctx.save();
-  ctx.translate(cx, cy);
-  ctx.rotate(wallAngle);
+  // Parallelogram: bottom follows wall, sides go straight up
+  const bl = { x: pL.x, y: pL.y - mountBot };
+  const br = { x: pR.x, y: pR.y - mountBot };
+  const tl = { x: pL.x, y: pL.y - mountBot - scrH };
+  const tr = { x: pR.x, y: pR.y - mountBot - scrH };
 
   // Bezel
-  const bx = -scrW / 2 - 2 * s;
-  const by = -scrH / 2 - 2 * s;
   ctx.fillStyle = '#1a1e2e';
-  ctx.fillRect(bx, by, scrW + 4 * s, scrH + 4 * s);
+  ctx.beginPath();
+  ctx.moveTo(tl.x, tl.y);
+  ctx.lineTo(tr.x, tr.y);
+  ctx.lineTo(br.x, br.y);
+  ctx.lineTo(bl.x, bl.y);
+  ctx.closePath();
+  ctx.fill();
   ctx.strokeStyle = '#3a4a64';
   ctx.lineWidth = 2;
-  ctx.strokeRect(bx, by, scrW + 4 * s, scrH + 4 * s);
+  ctx.stroke();
 
-  // Screen
+  // Screen surface (inset)
+  const m = 2 * s;
   ctx.fillStyle = '#0c1525';
-  ctx.fillRect(-scrW / 2, -scrH / 2, scrW, scrH);
+  ctx.beginPath();
+  ctx.moveTo(tl.x + ux * m, tl.y + uy * m + m);
+  ctx.lineTo(tr.x - ux * m, tr.y - uy * m + m);
+  ctx.lineTo(br.x - ux * m, br.y - uy * m - m);
+  ctx.lineTo(bl.x + ux * m, bl.y + uy * m - m);
+  ctx.closePath();
+  ctx.fill();
 
-  // ── Left: Equity curve (60%) ──
-  const chartW = scrW * 0.58;
-  const chartX = -scrW / 2 + 4 * s;
-  const chartTop = -scrH / 2 + 2 * s;
+  // Helper: map normalized (nx 0→1 along wall, ny 0→1 upward) to screen
+  function sPos(nx, ny) {
+    return {
+      x: bl.x + nx * wallDx,
+      y: bl.y + nx * wallDy - ny * scrH
+    };
+  }
 
-  const lblFs = Math.max(4, Math.round(5 * s));
+  // Isometric text helper
+  function wallText(text, nx, ny, align) {
+    const p = sPos(nx, ny);
+    ctx.save();
+    ctx.translate(p.x, p.y);
+    ctx.transform(ux, uy, 0, 1, 0, 0);
+    ctx.textAlign = align || 'left';
+    ctx.fillText(text, 0, 0);
+    ctx.restore();
+  }
+
+  // ── Left: Equity curve (58%) ──
+  const lblFs = Math.max(6, Math.round(8.5 * s));
+
   ctx.font = `bold ${lblFs}px "SF Mono", "Courier New", monospace`;
   ctx.fillStyle = '#5a7a90';
-  ctx.textAlign = 'left';
-  ctx.fillText('PORTFOLIO EQUITY', chartX, chartTop + lblFs + 1 * s);
+  wallText('PORTFOLIO EQUITY', 0.03, 0.92);
 
   // Grid lines
   ctx.strokeStyle = 'rgba(100,160,220,0.08)';
   ctx.lineWidth = 0.5;
   for (let i = 0; i < 4; i++) {
-    const gy = chartTop + lblFs + 4 * s + i * (scrH - lblFs - 10 * s) / 3;
+    const ny = 0.12 + i * 0.18;
+    const gl = sPos(0.03, ny);
+    const gr = sPos(0.55, ny);
     ctx.beginPath();
-    ctx.moveTo(chartX, gy);
-    ctx.lineTo(chartX + chartW, gy);
+    ctx.moveTo(gl.x, gl.y);
+    ctx.lineTo(gr.x, gr.y);
     ctx.stroke();
   }
 
-  // Equity curve
-  const curveTop = chartTop + lblFs + 6 * s;
-  const curveBot = scrH / 2 - 3 * s;
-  const curveAmp = (curveBot - curveTop) * 0.7;
-  ctx.strokeStyle = '#3fb950';
+  // Equity curve — live data or animated sine fallback
+  const eqHist = liveData.equityHistory;
+  const hasLiveEquity = eqHist && Array.isArray(eqHist) && eqHist.length >= 2;
+  let curvePoints = [];
+
+  if (hasLiveEquity) {
+    // Extract equity values, normalize to 0–1 range
+    const vals = eqHist.map(e => e.total_equity || e.equity || e.value || 0);
+    const minE = Math.min(...vals), maxE = Math.max(...vals);
+    const range = maxE - minE || 1;
+    curvePoints = vals.map((v, i) => ({
+      t: i / (vals.length - 1),
+      val: (v - minE) / range,
+    }));
+    // Determine curve color from trend
+    const trend = vals[vals.length - 1] >= vals[0];
+    ctx.strokeStyle = trend ? '#3fb950' : '#f85149';
+  } else {
+    // Animated sine fallback
+    for (let i = 0; i <= 30; i++) {
+      const t = i / 30;
+      const val = 0.5 + t * 0.15 +
+        Math.sin(t * 8 + animTime * 0.15) * 0.08 +
+        Math.sin(t * 3.2) * 0.12 +
+        Math.cos(t * 5.5 + 1) * 0.06;
+      curvePoints.push({ t, val: Math.max(0, Math.min(1, (val - 0.2) / 0.8)) });
+    }
+    ctx.strokeStyle = '#3fb950';
+  }
+
   ctx.lineWidth = 1.5 * s;
   ctx.beginPath();
-  for (let i = 0; i <= 30; i++) {
-    const t = i / 30;
-    const px = chartX + t * chartW;
-    const val = 0.5 + t * 0.15 +
-      Math.sin(t * 8 + animTime * 0.15) * 0.08 +
-      Math.sin(t * 3.2) * 0.12 +
-      Math.cos(t * 5.5 + 1) * 0.06;
-    const py = curveBot - val * curveAmp;
-    i === 0 ? ctx.moveTo(px, py) : ctx.lineTo(px, py);
-  }
+  curvePoints.forEach((pt, i) => {
+    const p = sPos(0.03 + pt.t * 0.52, 0.12 + (0.15 + pt.val * 0.55));
+    i === 0 ? ctx.moveTo(p.x, p.y) : ctx.lineTo(p.x, p.y);
+  });
   ctx.stroke();
+
   // Fill under curve
-  ctx.lineTo(chartX + chartW, curveBot);
-  ctx.lineTo(chartX, curveBot);
+  const cfR = sPos(0.55, 0.12);
+  const cfL = sPos(0.03, 0.12);
+  ctx.lineTo(cfR.x, cfR.y);
+  ctx.lineTo(cfL.x, cfL.y);
   ctx.closePath();
-  ctx.fillStyle = 'rgba(63,185,80,0.1)';
+  const fillColor = hasLiveEquity
+    ? (ctx.strokeStyle === '#3fb950' ? 'rgba(63,185,80,0.1)' : 'rgba(248,81,73,0.1)')
+    : 'rgba(63,185,80,0.1)';
+  ctx.fillStyle = fillColor;
   ctx.fill();
 
-  // ── Right: Top 3 markets (38%) ──
-  const mkX = chartX + chartW + 6 * s;
-  const mkW = scrW - chartW - 14 * s;
+  // Show current equity value if available
+  if (hasLiveEquity) {
+    const lastVal = eqHist[eqHist.length - 1];
+    const eqVal = lastVal.total_equity || lastVal.equity || lastVal.value || 0;
+    const eqFs = Math.max(5, Math.round(7.5 * s));
+    ctx.font = `bold ${eqFs}px "SF Mono", "Courier New", monospace`;
+    ctx.fillStyle = '#c9d1d9';
+    wallText('$' + fmtPrice(eqVal), 0.03, 0.80);
+  }
 
-  // Divider
+  // ── Divider ──
+  const dT = sPos(0.59, 0.92);
+  const dB = sPos(0.59, 0.06);
   ctx.strokeStyle = 'rgba(100,160,220,0.15)';
   ctx.lineWidth = 1;
   ctx.beginPath();
-  ctx.moveTo(mkX - 3 * s, -scrH / 2 + 3 * s);
-  ctx.lineTo(mkX - 3 * s, scrH / 2 - 3 * s);
+  ctx.moveTo(dT.x, dT.y);
+  ctx.lineTo(dB.x, dB.y);
   ctx.stroke();
 
+  // ── Right: Top 3 markets (38%) ──
   ctx.font = `bold ${lblFs}px "SF Mono", "Courier New", monospace`;
   ctx.fillStyle = '#5a7a90';
-  ctx.textAlign = 'left';
-  ctx.fillText('TOP MARKETS', mkX, chartTop + lblFs + 1 * s);
+  wallText('TOP MARKETS', 0.62, 0.92);
 
-  const markets = [
-    { sym: 'BTC', price: '87,241', chg: '+2.4%', color: '#3fb950' },
-    { sym: 'ETH', price: '2,148',  chg: '-1.2%', color: '#f85149' },
-    { sym: 'SPY', price: '512.3',  chg: '+0.8%', color: '#3fb950' },
-  ];
-  const symFs = Math.max(5, Math.round(6.5 * s));
-  const valFs = Math.max(4, Math.round(5 * s));
-  const rowH = (scrH - 12 * s - lblFs) / 3;
+  const MKT_SYMBOLS = ['BTC', 'ETH', 'SPY'];
+  const MKT_STATIC = { BTC: 87241, ETH: 2148, SPY: 512.3 };
+  const markets = MKT_SYMBOLS.map(sym => {
+    const price = (liveData.market && liveData.market[sym]) || MKT_STATIC[sym];
+    const prev = (liveData.prevMarket && liveData.prevMarket[sym]) || null;
+    let chgInfo = prev ? fmtChange(price, prev) : { text: '—', color: '#8b949e' };
+    if (!prev && liveData.priceHistory && liveData.priceHistory[sym] && liveData.priceHistory[sym].length >= 2) {
+      const h = liveData.priceHistory[sym];
+      chgInfo = fmtChange(h[h.length - 1], h[0]);
+    }
+    return { sym, price: fmtPrice(price), chg: chgInfo.text, color: chgInfo.color };
+  });
+  const symFs = Math.max(6, Math.round(10 * s));
+  const valFs = Math.max(5, Math.round(8.5 * s));
 
   markets.forEach((mk, i) => {
-    const ry = chartTop + lblFs + 6 * s + i * rowH;
+    const ny = 0.72 - i * 0.24;
 
     ctx.font = `bold ${symFs}px "SF Mono", "Courier New", monospace`;
     ctx.fillStyle = '#c9d1d9';
-    ctx.textAlign = 'left';
-    ctx.fillText(mk.sym, mkX, ry + symFs);
+    wallText(mk.sym, 0.62, ny);
 
     ctx.font = `${valFs}px "SF Mono", "Courier New", monospace`;
     ctx.fillStyle = '#8b949e';
-    ctx.fillText('$' + mk.price, mkX, ry + symFs + valFs + 2 * s);
+    wallText('$' + mk.price, 0.62, ny - 0.08);
 
     ctx.fillStyle = mk.color;
-    ctx.textAlign = 'right';
-    ctx.fillText(mk.chg, mkX + mkW, ry + symFs);
+    wallText(mk.chg, 0.96, ny, 'right');
 
-    // Mini sparkline
+    // Mini sparkline — live price history or animated sine fallback
+    const sparkData = liveData.priceHistory && liveData.priceHistory[mk.sym];
+    const hasSparkData = sparkData && sparkData.length >= 2;
     ctx.strokeStyle = mk.color;
     ctx.lineWidth = 0.8 * s;
     ctx.beginPath();
-    const spW = mkW * 0.4;
-    const spX = mkX + mkW - spW;
-    const spY = ry + symFs + valFs + 2 * s;
-    for (let j = 0; j <= 8; j++) {
-      const st = j / 8;
-      const sv = Math.sin(st * 5 + i * 2 + animTime * 0.3) * 0.5 + 0.5;
-      const sx = spX + st * spW;
-      const sy = spY + 2 * s - sv * 4 * s;
-      j === 0 ? ctx.moveTo(sx, sy) : ctx.lineTo(sx, sy);
+    if (hasSparkData) {
+      const minV = Math.min(...sparkData), maxV = Math.max(...sparkData);
+      const rng = maxV - minV || 1;
+      const step = Math.max(1, Math.floor(sparkData.length / 8));
+      for (let j = 0; j < Math.min(9, sparkData.length); j++) {
+        const idx = Math.min(j * step, sparkData.length - 1);
+        const sv = (sparkData[idx] - minV) / rng;
+        const sp = sPos(0.82 + (j / 8) * 0.14, ny - 0.02 + sv * 0.06);
+        j === 0 ? ctx.moveTo(sp.x, sp.y) : ctx.lineTo(sp.x, sp.y);
+      }
+    } else {
+      for (let j = 0; j <= 8; j++) {
+        const st = j / 8;
+        const sv = Math.sin(st * 5 + i * 2 + animTime * 0.3) * 0.5 + 0.5;
+        const sp = sPos(0.82 + st * 0.14, ny - 0.02 + sv * 0.06);
+        j === 0 ? ctx.moveTo(sp.x, sp.y) : ctx.lineTo(sp.x, sp.y);
+      }
     }
     ctx.stroke();
-    ctx.textAlign = 'left';
   });
-
-  ctx.restore();
 }
 
 // ── Draw a water cooler ────────────────────────────────────────
 function drawWaterCooler(gx, gy) {
   const { x, y } = isoToScreen(gx, gy);
   const { s } = getLayout();
+  // White base
   ctx.fillStyle = '#cccccc';
   ctx.fillRect(x - 4 * s, y - 18 * s, 8 * s, 18 * s);
   ctx.fillStyle = '#bbbbbb';
   ctx.fillRect(x, y - 18 * s, 4 * s, 18 * s);
+  // Blue jug (same width & height as base)
   ctx.fillStyle = '#4488cc';
-  ctx.fillRect(x - 3 * s, y - 30 * s, 6 * s, 12 * s);
+  ctx.fillRect(x - 4 * s, y - 36 * s, 8 * s, 18 * s);
   ctx.fillStyle = '#5599dd';
-  ctx.fillRect(x - 3 * s, y - 30 * s, 3 * s, 12 * s);
+  ctx.fillRect(x - 4 * s, y - 36 * s, 4 * s, 18 * s);
+  // Cap
   ctx.fillStyle = '#336699';
-  ctx.fillRect(x - 2 * s, y - 32 * s, 4 * s, 2 * s);
+  ctx.fillRect(x - 3 * s, y - 38 * s, 6 * s, 2 * s);
+  // Glare
   ctx.fillStyle = 'rgba(255,255,255,0.1)';
-  ctx.fillRect(x - 2 * s, y - 28 * s, 2 * s, 8 * s);
+  ctx.fillRect(x - 3 * s, y - 34 * s, 2 * s, 14 * s);
+  // Animated bubbles
+  ctx.fillStyle = 'rgba(200,230,255,0.4)';
+  for (let i = 0; i < 4; i++) {
+    const speed = 0.6 + i * 0.15;
+    const bx = x + (Math.sin(animTime * 1.3 + i * 2.5) * 2.5) * s;
+    const phase = ((animTime * speed + i * 0.7) % 1);
+    const by = y - 19 * s - phase * 16 * s;
+    const r = (1.0 + Math.sin(animTime * 2 + i) * 0.4) * s;
+    const alpha = phase < 0.8 ? 0.4 : 0.4 * (1 - (phase - 0.8) / 0.2);
+    ctx.globalAlpha = alpha;
+    ctx.beginPath();
+    ctx.arc(bx, by, r, 0, Math.PI * 2);
+    ctx.fill();
+  }
+  ctx.globalAlpha = 1;
 }
 
 // ── Draw a Roblox-style character ──────────────────────────────
@@ -642,7 +988,7 @@ function drawCharacter(gx, gy, colors, accessory, legPhase, bobY, seated) {
     ctx.fill();
   } else if (accessory === 'siren' && seated) {
     // Sleeping Zs — idle Circuit Breaker
-    const zFont = Math.max(6, Math.round(8 * s));
+    const zFont = Math.max(6, Math.round(8.8 * s));
     ctx.font = `bold ${zFont}px "SF Mono", "Courier New", monospace`;
     ctx.fillStyle = 'rgba(140,180,255,0.7)';
     for (let i = 0; i < 3; i++) {
@@ -732,32 +1078,41 @@ function drawGlassPartition(fromGx, fromGy, toGx, toGy) {
 
 // ── Agent definitions (3 zones) ────────────────────────────────
 //
-// EXECUTIVE AREA (back, gy=3):  Strategist, CircuitBreaker
-// ANALYST BULLPEN (middle, gy=6-8): NewsScout, Analyst, Chart, Devil
+// EXECUTIVE AREA (back, gy=2):  Strategist, CircuitBreaker
+// ANALYST BULLPEN (gy=7): NewsScout, Analyst, Chart, Devil
 // OPS FLOOR (front, gy=10): Risk, Executor, Journal
 //
 const agents = [
   // Executives
-  { name: 'Strategist', gx: 4,  gy: 2, accessory: 'clipboard',
+  { name: 'Strategist', gx: 4,  gy: 1.5, accessory: 'clipboard',
     colors: { body: '#e0e0e0', skin: '#e8c49a', legs: '#3a3a3a', hair: '#888888', hat: '#555555' } },
-  { name: 'Circuit',    gx: 11, gy: 2, accessory: 'siren',
+  { name: 'Circuit',    gx: 11, gy: 1.5, accessory: 'siren',
     colors: { body: '#ff6b6b', skin: '#f0c8a0', legs: '#4a2a2a', hair: '#1a0a0a', hat: null } },
   // Analysts (spread out)
-  { name: 'NewsScout',  gx: 4,  gy: 6, accessory: 'newspaper',
+  { name: 'NewsScout',  gx: 3,  gy: 6.5, accessory: 'newspaper',
     colors: { body: '#3fb950', skin: '#f0c8a0', legs: '#2a4a3a', hair: '#4a3520', hat: null } },
-  { name: 'Analyst',    gx: 7,  gy: 6, accessory: 'glasses',
+  { name: 'Analyst',    gx: 6,  gy: 6.5, accessory: 'glasses',
     colors: { body: '#58a6ff', skin: '#e8c49a', legs: '#2a3a5a', hair: '#2a1a0a', hat: null } },
-  { name: 'Chart',      gx: 10, gy: 6, accessory: 'chart',
+  { name: 'Chart',      gx: 9,  gy: 6.5, accessory: 'chart',
     colors: { body: '#bc8cff', skin: '#f0c8a0', legs: '#3a2a5a', hair: '#1a1a2e', hat: null } },
-  { name: 'Devil',      gx: 7,  gy: 8, accessory: 'horns',
+  { name: 'Devil',      gx: 12, gy: 6.5, accessory: 'horns',
     colors: { body: '#f85149', skin: '#d4a88c', legs: '#5a2a2a', hair: '#1a0a0a', hat: null } },
   // Ops
-  { name: 'Risk',       gx: 5,  gy: 10, accessory: 'shield',
+  { name: 'Risk',       gx: 2,  gy: 9.5, accessory: 'shield',
     colors: { body: '#d29922', skin: '#f0c8a0', legs: '#5a4a1a', hair: '#3a2a10', hat: null } },
-  { name: 'Executor',   gx: 7,  gy: 10, accessory: 'bolt',
+  { name: 'Executor',   gx: 5,  gy: 9.5, accessory: 'bolt',
     colors: { body: '#f0883e', skin: '#e8c49a', legs: '#5a3a1a', hair: '#2a1a0a', hat: null } },
-  { name: 'Journal',    gx: 9,  gy: 10, accessory: 'book',
+  { name: 'Journal',    gx: 8, gy: 9.5, accessory: 'book',
     colors: { body: '#39d2c0', skin: '#f0c8a0', legs: '#1a4a4a', hair: '#4a3520', hat: null } },
+  // NPC background workers (bullpen second row, gy=8)
+  { name: 'Trader1', gx: 2,  gy: 12.5, npc: true, accessory: null,
+    colors: { body: '#6b9e78', skin: '#e8c49a', legs: '#3a4a3a', hair: '#2a1a0a', hat: null } },
+  { name: 'Trader2', gx: 5,  gy: 12.5, npc: true, accessory: null,
+    colors: { body: '#7a8fc2', skin: '#f0c8a0', legs: '#2a3a5a', hair: '#4a3520', hat: null } },
+  { name: 'Trader3', gx: 8,  gy: 12.5, npc: true, accessory: null,
+    colors: { body: '#c29a6b', skin: '#d4a88c', legs: '#5a4a3a', hair: '#1a1a2e', hat: null } },
+  { name: 'Trader4', gx: 11, gy: 9.5, npc: true, accessory: null,
+    colors: { body: '#9b7abf', skin: '#f0c8a0', legs: '#3a2a5a', hair: '#1a0a0a', hat: null } },
 ];
 
 // ── Initialize agent runtime state ─────────────────────────────
@@ -776,6 +1131,12 @@ agents.forEach(a => {
   a.interactTimer = 0;
   a.pantryTrip = false;
   a.idleTimer = 0;
+  // NPC-specific state
+  if (a.name === 'Trader4') {
+    a.npcState = 'seated';     // seated | climbing | dancing | descending
+    a.npcTimer = 5 + Math.random() * 10;
+    a.dancePhase = 0;
+  }
 });
 
 // ── Walking system ─────────────────────────────────────────────
@@ -787,13 +1148,19 @@ const DIVIDER_GX = 8;         // center divider
 
 // Desk positions that agents must avoid when walking vertically
 const DESK_OBSTACLES = [
-  { gx: 4.5, gy: 5.5 }, { gx: 7.5, gy: 5.5 }, { gx: 10.5, gy: 5.5 },
-  { gx: 7.5, gy: 7.5 },
-  { gx: 5.5, gy: 9.5 }, { gx: 7.5, gy: 9.5 }, { gx: 9.5, gy: 9.5 },
+  { gx: 3, gy: 7 }, { gx: 4, gy: 7 },   // NewsScout
+  { gx: 6, gy: 7 }, { gx: 7, gy: 7 },   // Analyst
+  { gx: 9, gy: 7 }, { gx: 10, gy: 7 },  // Chart
+  { gx: 12, gy: 7 }, { gx: 13, gy: 7 }, // Devil
+  { gx: 2, gy: 13 },   // Trader1
+  { gx: 5, gy: 13 },   // Trader2
+  { gx: 8, gy: 13 },   // Trader3
+  { gx: 11, gy: 10 },  // Trader4
+  { gx: 2, gy: 10 }, { gx: 5, gy: 10 }, { gx: 8, gy: 10 },
 ];
 const SAFE_DIST = 0.8;
 // Vertical corridors that are ≥0.8 tiles from all desk centers
-const CORRIDORS = [3, 6.5, 8.5, 13];
+const CORRIDORS = [2, 5, 8, 11, 14];
 
 function verticalHitsDesk(gx, fromGy, toGy) {
   const minGy = Math.min(fromGy, toGy);
@@ -803,12 +1170,14 @@ function verticalHitsDesk(gx, fromGy, toGy) {
   );
 }
 
-function nearestCorridor(gx) {
-  let best = CORRIDORS[0];
-  for (const c of CORRIDORS) {
-    if (Math.abs(c - gx) < Math.abs(best - gx)) best = c;
+function nearestCorridor(gx, fromGy, toGy) {
+  // Pick closest corridor that is actually clear for this gy range
+  const sorted = [...CORRIDORS].sort((a, b) => Math.abs(a - gx) - Math.abs(b - gx));
+  for (const c of sorted) {
+    if (!verticalHitsDesk(c, fromGy, toGy)) return c;
   }
-  return best;
+  // All corridors blocked — pick midpoint between two nearest desks as fallback
+  return sorted[0] + 0.5;
 }
 
 function calcWalkPath(fromGx, fromGy, toGx, toGy) {
@@ -839,7 +1208,7 @@ function calcWalkPath(fromGx, fromGy, toGx, toGy) {
 
   } else if (fromGy !== toGy && verticalHitsDesk(toGx, fromGy, toGy)) {
     // Vertical segment would cross a desk — route through safe corridor
-    const corridor = nearestCorridor(toGx);
+    const corridor = nearestCorridor(toGx, fromGy, toGy);
     if (Math.abs(fromGx - corridor) > 0.1) path.push({ gx: corridor, gy: fromGy });
     path.push({ gx: corridor, gy: toGy });
     if (Math.abs(corridor - toGx) > 0.1) path.push({ gx: toGx, gy: toGy });
@@ -855,7 +1224,7 @@ function calcWalkPath(fromGx, fromGy, toGx, toGy) {
 
 function sendAgentTo(agentName, targetGx, targetGy, pauseDuration) {
   const agent = agents.find(a => a.name === agentName);
-  if (!agent || agent.state !== 'idle') return false;
+  if (!agent || agent.npc || agent.state !== 'idle') return false;
   agent.state = 'walking';
   agent.walkPath = calcWalkPath(agent.renderGx, agent.renderGy, targetGx, targetGy);
   agent.walkIndex = 0;
@@ -929,7 +1298,7 @@ function updateAgents(dt) {
 
 // ── Pantry gossip system ────────────────────────────────────────
 const PANTRY_SPOTS = [
-  { gx: 11,   gy: 13 },
+  { gx: 10,   gy: 13 },
   { gx: 12.5, gy: 13 },
   { gx: 14,   gy: 13 },
 ];
@@ -1045,6 +1414,121 @@ function updateDemo(dt) {
   }
 }
 
+// ── NPC animations ────────────────────────────────────────────
+function updateNPCs(dt) {
+  const trd4 = agents.find(a => a.name === 'Trader4');
+  if (trd4) {
+    if (trd4.npcState === 'seated') {
+      trd4.npcTimer -= dt;
+      if (trd4.npcTimer <= 0) {
+        trd4.npcState = 'climbing';
+        trd4.npcTimer = 0.6;
+      }
+    } else if (trd4.npcState === 'climbing') {
+      trd4.npcTimer -= dt;
+      if (trd4.npcTimer <= 0) {
+        trd4.npcState = 'dancing';
+        trd4.npcTimer = 4 + Math.random() * 3;
+        trd4.dancePhase = 0;
+      }
+    } else if (trd4.npcState === 'dancing') {
+      trd4.dancePhase += dt * 8;
+      trd4.npcTimer -= dt;
+      if (trd4.npcTimer <= 0) {
+        trd4.npcState = 'descending';
+        trd4.npcTimer = 0.6;
+      }
+    } else if (trd4.npcState === 'descending') {
+      trd4.npcTimer -= dt;
+      if (trd4.npcTimer <= 0) {
+        trd4.npcState = 'seated';
+        trd4.npcTimer = 8 + Math.random() * 15;
+      }
+    }
+  }
+}
+
+function drawNPCEffect(agent, pos) {
+  const { s } = getLayout();
+  const x = pos.x;
+  const baseY = pos.baseY;
+
+  if (agent.name === 'Trader1') {
+    // Eating endlessly — food bobs to mouth
+    const eatCycle = (animTime * 1.5) % 1;
+    const foodY = baseY - 50 * s + Math.sin(eatCycle * Math.PI) * 8 * s;
+    const foodX = x + 10 * s;
+    ctx.fillStyle = '#d4a44a';
+    ctx.fillRect(foodX - 3 * s, foodY - 2 * s, 6 * s, 4 * s);
+    ctx.fillStyle = '#8b4513';
+    ctx.fillRect(foodX - 3 * s, foodY - 0.5 * s, 6 * s, 1.5 * s);
+    ctx.fillStyle = '#c8a040';
+    ctx.fillRect(foodX - 3.5 * s, foodY - 3 * s, 7 * s, 2 * s);
+    // Crumbs falling
+    if (eatCycle > 0.3 && eatCycle < 0.7) {
+      ctx.fillStyle = 'rgba(200,160,60,0.5)';
+      for (let i = 0; i < 3; i++) {
+        const cx = foodX + (Math.sin(animTime * 4 + i * 2.1) * 4) * s;
+        const cy = foodY + 4 * s + ((animTime * 30 + i * 11) % 12) * s;
+        ctx.fillRect(cx, cy, 1.2 * s, 1.2 * s);
+      }
+    }
+  }
+
+  if (agent.name === 'Trader2') {
+    // Panicking — sweat drops + panic lines
+    ctx.fillStyle = 'rgba(100,180,255,0.6)';
+    for (let i = 0; i < 3; i++) {
+      const dropPhase = ((animTime * 2 + i * 0.8) % 1);
+      const dx = x + (i - 1) * 8 * s;
+      const dy = baseY - 65 * s + dropPhase * 20 * s;
+      const dropSize = (1 - dropPhase) * 2 * s;
+      ctx.beginPath();
+      ctx.arc(dx, dy, dropSize, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    // Panic lines above head
+    ctx.strokeStyle = 'rgba(255,100,100,0.5)';
+    ctx.lineWidth = 1;
+    for (let i = 0; i < 2; i++) {
+      const lx = x + (i === 0 ? -8 : 8) * s;
+      const ly = baseY - 72 * s + Math.sin(animTime * 6 + i) * 3 * s;
+      ctx.beginPath();
+      ctx.moveTo(lx, ly);
+      ctx.lineTo(lx + (i === 0 ? -4 : 4) * s, ly - 5 * s);
+      ctx.stroke();
+    }
+  }
+
+  if (agent.name === 'Trader3') {
+    // Smoking — cigarette + smoke wisps
+    const mouthX = x + 9 * s;
+    const mouthY = baseY - 48 * s;
+    ctx.fillStyle = '#e8e0d0';
+    ctx.fillRect(mouthX, mouthY - 1 * s, 8 * s, 2 * s);
+    ctx.fillStyle = '#ff6633';
+    ctx.fillRect(mouthX + 7 * s, mouthY - 1.2 * s, 2 * s, 2.4 * s);
+    const glowR = (1 + Math.sin(animTime * 3) * 0.3);
+    ctx.fillStyle = `rgba(255,100,30,${0.15 * glowR})`;
+    ctx.beginPath();
+    ctx.arc(mouthX + 8 * s, mouthY, 3 * s * glowR, 0, Math.PI * 2);
+    ctx.fill();
+    // Smoke wisps
+    for (let i = 0; i < 5; i++) {
+      const t = ((animTime * 0.4 + i * 0.35) % 1);
+      const sx = mouthX + 8 * s + Math.sin(animTime * 0.8 + i * 1.7) * 6 * s * t;
+      const sy = mouthY - t * 25 * s;
+      const sr = (1.5 + t * 4) * s;
+      ctx.globalAlpha = (1 - t) * 0.25;
+      ctx.fillStyle = 'rgba(180,180,190,0.9)';
+      ctx.beginPath();
+      ctx.arc(sx, sy, sr, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    ctx.globalAlpha = 1;
+  }
+}
+
 // ── Draw everything ────────────────────────────────────────────
 function draw() {
   const layout = getLayout();
@@ -1059,15 +1543,33 @@ function draw() {
   ctx.fillRect(0, 0, W, H);
 
   // Title
-  const titleSize = Math.max(13, Math.round(18 * s));
+  const titleSize = Math.max(13, Math.round(19.8 * s));
   ctx.fillStyle = '#8b949e';
   ctx.font = `bold ${titleSize}px "SF Mono", "Courier New", monospace`;
   ctx.textAlign = 'center';
   ctx.fillText('AGENT TRADING FLOOR', W / 2, titleSpace * 0.55);
-  const subSize = Math.max(8, Math.round(10 * s));
+  const subSize = Math.max(8, Math.round(11 * s));
   ctx.fillStyle = '#484f58';
   ctx.font = `${subSize}px "SF Mono", "Courier New", monospace`;
   ctx.fillText('9 agents  ·  autonomous trading system', W / 2, titleSpace * 0.55 + titleSize + 4);
+
+  // Connection status indicator (top-right)
+  const statusFs = Math.max(7, Math.round(9 * s));
+  ctx.font = `${statusFs}px "SF Mono", "Courier New", monospace`;
+  ctx.textAlign = 'right';
+  if (liveData.connected || liveData.wsConnected) {
+    const dotPulse = 0.5 + Math.sin(animTime * 3) * 0.3;
+    ctx.fillStyle = `rgba(63,185,80,${dotPulse})`;
+    ctx.beginPath();
+    ctx.arc(W - 14, titleSpace * 0.35, 3.5 * s, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = '#3fb950';
+    ctx.fillText(liveMode ? 'LIVE' : 'CONNECTED', W - 22, titleSpace * 0.40);
+  } else {
+    ctx.fillStyle = '#484f58';
+    ctx.fillText('DEMO', W - 14, titleSpace * 0.40);
+  }
+  ctx.textAlign = 'left';
 
   // Floor tiles (brighter) + executive office carpet
   for (let gx = 0; gx < GRID_SIZE; gx++) {
@@ -1114,8 +1616,8 @@ function draw() {
   // Massive wall display (right wall, top-left to mid-top)
   drawWallDisplay();
 
-  // Ticker board (on right wall, near executive area)
-  drawTickerBoard(7.5, 1);
+  // Ticker board (left wall, Strat's office)
+  drawTickerBoard();
 
   // ── Glass partitions (executive offices: 8x5 each, shared divider) ──
   // Strategist front wall with door gap at gx 3.5–5
@@ -1128,75 +1630,90 @@ function draw() {
   drawGlassPartition(8, 0, 8, 5);
 
   // ── Zone labels ──
-  const zoneFontSize = Math.max(7, Math.round(8 * s));
+  const zoneFontSize = Math.max(7, Math.round(8.8 * s));
   ctx.font = `${zoneFontSize}px "SF Mono", "Courier New", monospace`;
   ctx.textAlign = 'center';
   ctx.fillStyle = 'rgba(139,148,158,0.4)';
   const execPos = isoToScreen(7.5, 0.5);
   ctx.fillText('EXECUTIVE', execPos.x, execPos.y);
-  const analPos = isoToScreen(7, 5.5);
+  const analPos = isoToScreen(7, 6.3);
   ctx.fillText('ANALYST BULLPEN', analPos.x, analPos.y);
-  const opsPos = isoToScreen(7, 9.3);
+  const opsPos = isoToScreen(7, 9.5);
   ctx.fillText('OPS FLOOR', opsPos.x, opsPos.y);
 
   // ── Furniture ──
   const deskH = 14 * s;
 
-  // Executive long desks (warm mahogany) + 2 large monitors each
-  // Strategist: 4 tiles wide at gy=1
-  drawCube(2, 1, 4, deskH, 1, '#7a6050');
-  drawLargeMonitor(3, 1.3, '#1a3848');
-  drawLargeMonitor(5, 1.3, '#1a3848');
+  // All desks + monitors drawn after agents (post-agent pass)
 
-  // Circuit: 4 tiles wide at gy=1
-  drawCube(10, 1, 4, deskH, 1, '#7a6050');
-  drawLargeMonitor(11, 1.3, '#481a28');
-  drawLargeMonitor(13, 1.3, '#481a28');
+  // Chairs
+  drawExecChair(4, 1.5);  // Strategist
+  drawExecChair(11, 1.5); // Circuit
+  drawChair(3, 6.5);   // NewsScout
+  drawChair(6, 6.5);   // Analyst
+  drawChair(9, 6.5);   // Chart
+  drawChair(12, 6.5);  // Devil
+  drawChair(2, 12.5);  // Trader1
+  drawChair(5, 12.5);  // Trader2
+  drawChair(8, 12.5);  // Trader3
+  drawChair(11, 9.5);  // Trader4
+  drawChair(2, 9.5);   // Risk
+  drawChair(5, 9.5);   // Executor
+  drawChair(8, 9.5);   // Journal
 
-  // Analyst desks (MEDIUM — 1.0 width/depth, light oak)
-  drawCube(4.5, 5.5, 1.0, deskH, 1.0, '#8a7560');
-  drawMonitor(4.5, 5.5, '#1a4838');
-  drawCube(7.5, 5.5, 1.0, deskH, 1.0, '#8a7560');
-  drawMonitor(7.5, 5.5, '#1a3848');
-  drawCube(10.5, 5.5, 1.0, deskH, 1.0, '#8a7560');
-  drawMonitor(10.5, 5.5, '#3a1a48');
-  drawCube(7.5, 7.5, 1.0, deskH, 1.0, '#8a7560');
-  drawMonitor(7.5, 7.5, '#481a1a');
+  // ── Pantry (4 joined tables along bottom wall at gy=14) ──
+  drawCube(11, 14, 1, deskH, 1, '#6a5a48');
+  drawCube(12, 14, 1, deskH, 1, '#6a5a48');
+  drawCube(13, 14, 1, deskH, 1, '#6a5a48');
+  drawCube(14, 14, 1, deskH, 1, '#6a5a48');
+  // Water cooler
+  drawWaterCooler(15, 14);
 
-  // Ops desks (SMALL — 0.7 width/depth, lighter pine)
-  drawCube(5.5, 9.5, 0.7, deskH, 0.7, '#7a6a50');
-  drawMonitor(5.5, 9.5, '#48401a');
-  drawCube(7.5, 9.5, 0.7, deskH, 0.7, '#7a6a50');
-  drawMonitor(7.5, 9.5, '#48381a');
-  drawCube(9.5, 9.5, 0.7, deskH, 0.7, '#7a6a50');
-  drawMonitor(9.5, 9.5, '#1a4842');
-
-  // Chairs (updated positions for new layout)
-  drawChair(4.2, 2.6);   // Strategist
-  drawChair(11.2, 2.6);  // Circuit
-  drawChair(4.2, 6.6);   // NewsScout
-  drawChair(7.2, 6.6);   // Analyst
-  drawChair(10.2, 6.6);  // Chart
-  drawChair(7.2, 8.6);   // Devil
-  drawChair(5.2, 10.6);
-  drawChair(7.2, 10.6);
-  drawChair(9.2, 10.6);
-
-  // ── Pantry (long counter along bottom wall, gx 10→15 at gy=14) ──
-  // Long counter
-  drawCube(10, 14, 5, deskH * 0.7, 1, '#6a5a48');
-  // Coffee machine
-  const coffeePos = isoToScreen(11, 14.3);
-  ctx.fillStyle = '#4a3a30';
-  ctx.fillRect(coffeePos.x - 3 * s, coffeePos.y - deskH * 0.7 - 8 * s, 6 * s, 8 * s);
+  // Coffee machine at (11.5, 14.5)
+  const cmPos = isoToScreen(11.5, 14.5);
+  ctx.fillStyle = '#3a3030';
+  ctx.fillRect(cmPos.x - 4 * s, cmPos.y - deskH - 12 * s, 8 * s, 12 * s);
+  ctx.fillStyle = '#2a2020';
+  ctx.fillRect(cmPos.x - 3 * s, cmPos.y - deskH - 6 * s, 6 * s, 4 * s);
   ctx.fillStyle = '#e83030';
-  ctx.fillRect(coffeePos.x - 1 * s, coffeePos.y - deskH * 0.7 - 5 * s, 2 * s, 2 * s);
-  // Sink
-  const sinkPos = isoToScreen(12.5, 14.3);
-  ctx.fillStyle = '#4a4a5a';
-  ctx.fillRect(sinkPos.x - 3 * s, sinkPos.y - deskH * 0.7 - 1 * s, 6 * s, 4 * s);
-  // Water cooler (end of counter)
-  drawWaterCooler(15, 13.5);
+  ctx.fillRect(cmPos.x + 2 * s, cmPos.y - deskH - 11 * s, 2 * s, 2 * s);
+  // Tiny coffee cup next to machine (slightly off-center = messy)
+  ctx.fillStyle = '#ddd';
+  ctx.fillRect(cmPos.x + 5 * s, cmPos.y - deskH - 4 * s, 3 * s, 4 * s);
+  ctx.fillStyle = '#5a3a20';
+  ctx.fillRect(cmPos.x + 5.5 * s, cmPos.y - deskH - 3.5 * s, 2 * s, 2 * s);
+
+  // Snack box at (12.5, 14.5) — open, tilted
+  const snkPos = isoToScreen(12.5, 14.5);
+  ctx.fillStyle = '#d4a040';
+  ctx.fillRect(snkPos.x - 4 * s, snkPos.y - deskH - 6 * s, 7 * s, 6 * s);
+  ctx.fillStyle = '#c08830';
+  ctx.fillRect(snkPos.x - 3 * s, snkPos.y - deskH - 5 * s, 5 * s, 3 * s);
+  // Crumbs scattered
+  ctx.fillStyle = '#c09030';
+  ctx.fillRect(snkPos.x + 5 * s, snkPos.y - deskH - 2 * s, 2 * s, 1.5 * s);
+  ctx.fillRect(snkPos.x - 6 * s, snkPos.y - deskH - 1 * s, 1.5 * s, 1.5 * s);
+  ctx.fillRect(snkPos.x + 3 * s, snkPos.y - deskH - 0.5 * s, 1 * s, 1 * s);
+
+  // Soda can at (13.5, 14.5) — slightly off-center
+  const sodaPos = isoToScreen(13.5, 14.5);
+  ctx.fillStyle = '#2266cc';
+  ctx.fillRect(sodaPos.x + 1 * s, sodaPos.y - deskH - 8 * s, 4 * s, 8 * s);
+  ctx.fillStyle = '#aabbcc';
+  ctx.fillRect(sodaPos.x + 1.5 * s, sodaPos.y - deskH - 8.5 * s, 3 * s, 1.5 * s);
+  // Another cup — used, left behind
+  ctx.fillStyle = '#ccc';
+  ctx.fillRect(sodaPos.x - 5 * s, sodaPos.y - deskH - 4 * s, 3 * s, 4 * s);
+  ctx.fillStyle = '#4a3020';
+  ctx.fillRect(sodaPos.x - 4.5 * s, sodaPos.y - deskH - 3.5 * s, 2 * s, 1.5 * s);
+
+  // Napkins scattered on (14.5, 14.5)
+  const napPos = isoToScreen(14.5, 14.5);
+  ctx.fillStyle = '#e8e4dc';
+  ctx.fillRect(napPos.x - 3 * s, napPos.y - deskH - 3 * s, 5 * s, 3 * s);
+  ctx.fillStyle = '#ddd8d0';
+  ctx.fillRect(napPos.x + 2 * s, napPos.y - deskH - 4 * s, 4 * s, 2.5 * s);
+  ctx.fillRect(napPos.x - 5 * s, napPos.y - deskH - 1 * s, 3 * s, 2 * s);
   // Pantry label
   const pantryLbl = isoToScreen(12.5, 13.5);
   ctx.fillStyle = 'rgba(139,148,158,0.35)';
@@ -1204,42 +1721,125 @@ function draw() {
   ctx.textAlign = 'center';
   ctx.fillText('PANTRY', pantryLbl.x, pantryLbl.y - 2 * s);
 
-  // ── Draw agents (depth-sorted by current position) ──
-  const labelQueue = [];
+  // ── Depth-sorted rendering: agents + desks interleaved ──
+  // Higher gx+gy = closer to camera = drawn later (on top)
   const bubbleQueue = [];
-  const sorted = [...agents].sort((a, b) => (a.renderGx + a.renderGy) - (b.renderGx + b.renderGy));
+  const drawList = [];
+  const npFs = Math.min(10, Math.max(5, Math.round(7.7 * s)));
 
-  for (const agent of sorted) {
-    const isSeated = agent.state === 'idle';
-    const pos = drawCharacter(
-      agent.renderGx, agent.renderGy,
-      agent.colors, agent.accessory,
-      agent.legPhase, agent.idleBob, isSeated
-    );
-    labelQueue.push({ name: agent.name, x: pos.x, y: pos.baseY, color: agent.colors.body });
-
-    // Speech bubble for interacting agents
-    if (agent.state === 'interacting') {
-      bubbleQueue.push({ x: pos.x, y: pos.baseY });
-    }
+  // Nameplate helper (draws on desk surface)
+  function drawNP(name, gx, gy) {
+    ctx.font = `bold ${npFs}px "SF Mono", "Courier New", monospace`;
+    ctx.textAlign = 'center';
+    const p = isoToScreen(gx, gy);
+    const tw = ctx.measureText(name).width;
+    ctx.fillStyle = 'rgba(30,36,48,0.7)';
+    ctx.fillRect(p.x - tw / 2 - 2, p.y - deskH - npFs + 1, tw + 4, npFs + 2);
+    ctx.fillStyle = '#8a9aaa';
+    ctx.fillText(name, p.x, p.y - deskH);
   }
+
+  // -- Desk groups (each with cubes + monitors + nameplate) --
+  drawList.push({ depth: 4 + 2, fn() {
+    drawCube(3,2,1,deskH,1,'#7a6050'); drawCube(4,2,1,deskH,1,'#7a6050'); drawCube(5,2,1,deskH,1,'#7a6050');
+    drawLargeMonitor(3.5,2.5,'#1a3848'); drawLargeMonitor(4.5,2.5,'#1a3848');
+    drawNP('Strategist', 4.5, 2.5);
+  }});
+  drawList.push({ depth: 11 + 2, fn() {
+    drawCube(10,2,1,deskH,1,'#7a6050'); drawCube(11,2,1,deskH,1,'#7a6050'); drawCube(12,2,1,deskH,1,'#7a6050');
+    drawLargeMonitor(10.5,2.5,'#481a28'); drawLargeMonitor(11.5,2.5,'#481a28');
+    drawNP('Circuit', 11.5, 2.5);
+  }});
+  drawList.push({ depth: 3.5 + 7, fn() {
+    drawCube(3,7,1,deskH,1,'#8a7560'); drawCube(4,7,1,deskH,1,'#8a7560');
+    drawMonitor(3.5,7.5,'#1a4838'); drawNP('NewsScout', 3.5, 7.5);
+  }});
+  drawList.push({ depth: 6.5 + 7, fn() {
+    drawCube(6,7,1,deskH,1,'#8a7560'); drawCube(7,7,1,deskH,1,'#8a7560');
+    drawMonitor(6.5,7.5,'#1a3848'); drawNP('Analyst', 6.5, 7.5);
+  }});
+  drawList.push({ depth: 9.5 + 7, fn() {
+    drawCube(9,7,1,deskH,1,'#8a7560'); drawCube(10,7,1,deskH,1,'#8a7560');
+    drawMonitor(9.5,7.5,'#3a1a48'); drawNP('Chart', 9.5, 7.5);
+  }});
+  drawList.push({ depth: 12.5 + 7, fn() {
+    drawCube(12,7,1,deskH,1,'#8a7560'); drawCube(13,7,1,deskH,1,'#8a7560');
+    drawMonitor(12.5,7.5,'#481a1a'); drawNP('Devil', 12.5, 7.5);
+  }});
+  drawList.push({ depth: 2 + 10, fn() {
+    drawCube(2,10,1,deskH,1,'#7a6a50'); drawMonitor(2.5,10.5,'#48401a');
+    drawNP('Risk', 2.5, 10.5);
+  }});
+  drawList.push({ depth: 5 + 10, fn() {
+    drawCube(5,10,1,deskH,1,'#7a6a50'); drawMonitor(5.5,10.5,'#48381a');
+    drawNP('Executor', 5.5, 10.5);
+  }});
+  drawList.push({ depth: 8 + 10, fn() {
+    drawCube(8,10,1,deskH,1,'#7a6a50'); drawMonitor(8.5,10.5,'#1a4842');
+    drawNP('Journal', 8.5, 10.5);
+  }});
+  drawList.push({ depth: 2 + 13, fn() {
+    drawCube(2,13,1,deskH,1,'#7a6a55'); drawMonitor(2.5,13.5,'#2a3828');
+    drawNP('Intern', 2.5, 13.5);
+  }});
+  drawList.push({ depth: 5 + 13, fn() {
+    drawCube(5,13,1,deskH,1,'#7a6a55'); drawMonitor(5.5,13.5,'#28382a');
+    drawNP('Intern', 5.5, 13.5);
+  }});
+  drawList.push({ depth: 8 + 13, fn() {
+    drawCube(8,13,1,deskH,1,'#7a6a55'); drawMonitor(8.5,13.5,'#382a28');
+    drawNP('Intern', 8.5, 13.5);
+  }});
+  drawList.push({ depth: 11 + 10, fn() {
+    drawCube(11,10,1,deskH,1,'#7a6a55'); drawMonitor(11.5,10.5,'#28283a');
+    drawNP('Intern', 11.5, 10.5);
+  }});
+
+  // -- Agents --
+  for (const agent of agents) {
+    let drawGx = agent.renderGx;
+    let drawGy = agent.renderGy;
+    let isSeated = agent.state === 'idle';
+    let legP = agent.legPhase;
+    let bob = agent.idleBob;
+    let depthBias = 0;
+
+    // Trader4: adjust position when on table
+    if (agent.name === 'Trader4') {
+      if (agent.npcState === 'dancing') {
+        isSeated = false;
+        drawGy = agent.homeGy + 0.5;
+        legP = agent.dancePhase;
+        bob = Math.sin(agent.dancePhase * 2) * 2;
+        depthBias = 0.1;
+      } else if (agent.npcState === 'climbing' || agent.npcState === 'descending') {
+        isSeated = false;
+        const progress = agent.npcState === 'climbing' ? 1 - (agent.npcTimer / 0.6) : agent.npcTimer / 0.6;
+        drawGy = agent.homeGy + progress * 0.5;
+        depthBias = 0.1;
+      }
+    }
+    // Trader2: shake
+    if (agent.name === 'Trader2') drawGx += Math.sin(animTime * 20) * 0.05;
+
+    // Capture values for closure
+    const _gx = drawGx, _gy = drawGy, _a = agent;
+    const _seated = isSeated, _leg = legP, _bob = bob;
+
+    drawList.push({ depth: drawGx + drawGy + depthBias, fn() {
+      const pos = drawCharacter(_gx, _gy, _a.colors, _a.accessory, _leg, _bob, _seated);
+      if (_a.npc) drawNPCEffect(_a, pos);
+      if (_a.state === 'interacting') bubbleQueue.push({ x: pos.x, y: pos.baseY });
+    }});
+  }
+
+  // Sort back-to-front and draw all
+  drawList.sort((a, b) => a.depth - b.depth);
+  for (const item of drawList) item.fn();
 
   // Speech bubbles
   for (const b of bubbleQueue) {
     drawSpeechBubble(b.x, b.y);
-  }
-
-  // Labels (always on top)
-  const fontSize = Math.max(8, Math.round(11 * s));
-  ctx.font = `bold ${fontSize}px "SF Mono", "Courier New", monospace`;
-  ctx.textAlign = 'center';
-  for (const lbl of labelQueue) {
-    const ly = lbl.y + 20 * s;
-    const tw = ctx.measureText(lbl.name).width;
-    ctx.fillStyle = 'rgba(26,32,48,0.8)';
-    ctx.fillRect(lbl.x - tw / 2 - 3, ly - fontSize + 1, tw + 6, fontSize + 2);
-    ctx.fillStyle = '#c9d1d9';
-    ctx.fillText(lbl.name, lbl.x, ly);
   }
 
   // Floating demo label
@@ -1247,7 +1847,7 @@ function draw() {
     const agent = agents.find(a => a.name === demo.labelAgent);
     if (agent) {
       const pos = isoToScreen(agent.renderGx, agent.renderGy);
-      const lfs = Math.max(7, Math.round(9 * s));
+      const lfs = Math.max(7, Math.round(9.9 * s));
       ctx.font = `${lfs}px "SF Mono", "Courier New", monospace`;
       const tw = ctx.measureText(demo.label).width;
       const lx = pos.x;
@@ -1270,7 +1870,9 @@ function animLoop(timestamp) {
 
   updateAgents(cappedDt);
   updatePantryVisits(cappedDt);
-  updateDemo(cappedDt);
+  processLiveEvents();         // handle real-time WS events
+  if (!liveMode) updateDemo(cappedDt);  // demo loop pauses during live events
+  updateNPCs(cappedDt);
   draw();
 
   requestAnimationFrame(animLoop);

@@ -629,6 +629,7 @@ body::after {
   position: absolute;
   top: 0; left: 0; right: 0; bottom: 0;
   overflow: hidden;
+  z-index: 0;
 }
 .creature-fullpage canvas {
   position: absolute;
@@ -692,21 +693,14 @@ body::after {
 <!-- Ambient particles canvas (behind everything) -->
 <canvas id="ambient-particles" style="position:fixed;top:0;left:0;width:100%;height:100%;pointer-events:none;z-index:0;opacity:0.4;"></canvas>
 
-<!-- VIEW 1: Creature (default) -->
+<!-- VIEW 1: Agent Trading Floor (default) -->
 <div class="view-creature" id="view-creature">
   <div class="creature-header">
-    <h1><span>&#9670;</span> Lotus</h1>
+    <h1><span>&#9670;</span> Trading Floor</h1>
     <button class="view-btn" onclick="switchView('dashboard')">Dashboard</button>
   </div>
   <div class="creature-fullpage">
-    <canvas id="lotus-canvas-main" width="500" height="600"></canvas>
-    <div class="creature-fullpage-stats">
-      <div><div class="stat-val" id="lotus-fp-stage">Dormant</div>Stage</div>
-      <div><div class="stat-val" id="lotus-fp-level">1</div>Level</div>
-      <div><div class="stat-val" id="lotus-fp-mood">idle</div>Mood</div>
-      <div><div class="stat-val" id="lotus-fp-hp">100</div>HP</div>
-      <div><div class="stat-val" id="lotus-fp-xp">0</div>XP</div>
-    </div>
+    <iframe id="agent-floor-frame" src="/agents" style="width:100%;height:100%;border:none;"></iframe>
   </div>
 </div>
 
@@ -717,7 +711,7 @@ body::after {
 <div class="header">
   <h1><span>&#9670;</span> Trading System <span>Command Center</span></h1>
   <div class="ws-status">
-    <button class="view-btn" onclick="switchView('creature')" style="margin-right:10px">Lotus</button>
+    <button class="view-btn" onclick="switchView('creature')" style="margin-right:10px">Trading Floor</button>
     <div class="ws-dot" id="ws-dot"></div>
     <span id="ws-label">Disconnected</span>
   </div>
@@ -884,7 +878,8 @@ body::after {
 
 </div><!-- /view-dashboard -->
 
-<script src="/static/lotus-creature.js"></script>
+<!-- Lotus creature disabled — Trading Floor is now the default view -->
+<!-- <script src="/static/lotus-creature.js"></script> -->
 <script>
 /* ================================================================
    Trading System Command Center — Vanilla JS
@@ -1822,59 +1817,7 @@ function switchView(target) {
   }
 }
 
-// ── Lotus Creature (full-page canvas) ─────────────────────────
-function resizeLotusCanvas() {
-  const c = document.getElementById('lotus-canvas-main');
-  const parent = c.parentElement;
-  const dpr = window.devicePixelRatio || 1;
-  c.width = parent.clientWidth * dpr;
-  c.height = parent.clientHeight * dpr;
-  c.getContext('2d').scale(dpr, dpr);
-  if (window.lotus) {
-    window.lotus.opts.width = parent.clientWidth;
-    window.lotus.opts.height = parent.clientHeight;
-    window.lotus._particles = window.lotus._makeParticles();
-    window.lotus._stars = window.lotus._makeStars();
-  }
-}
-resizeLotusCanvas();
-window.addEventListener('resize', resizeLotusCanvas);
-
-const lotus = new LotusCreature('lotus-canvas-main', {
-  wsUrl: null,
-  width: document.getElementById('lotus-canvas-main').parentElement.clientWidth,
-  height: document.getElementById('lotus-canvas-main').parentElement.clientHeight,
-});
-window.lotus = lotus;
-lotus.init();
-
-// Update creature stats
-setInterval(() => {
-  if (!window.lotus) return;
-  const s = lotus.getState();
-  const g = s.palette && s.palette.glow;
-  const glow = g ? `rgb(${g[0]},${g[1]},${g[2]})` : 'var(--cyan)';
-
-  const fpStage = document.getElementById('lotus-fp-stage');
-  if (fpStage) { fpStage.textContent = s.stageName || 'Dormant'; fpStage.style.color = glow; }
-  const fpLevel = document.getElementById('lotus-fp-level');
-  if (fpLevel) fpLevel.textContent = s.level || 1;
-  const fpMood = document.getElementById('lotus-fp-mood');
-  if (fpMood) fpMood.textContent = s.mood || 'idle';
-  const fpHp = document.getElementById('lotus-fp-hp');
-  if (fpHp) fpHp.textContent = s.hp || 100;
-  const fpXp = document.getElementById('lotus-fp-xp');
-  if (fpXp) fpXp.textContent = s.xp || 0;
-
-  const dStage = document.getElementById('lotus-stage');
-  if (dStage) { dStage.textContent = s.stageName || 'Dormant'; dStage.style.color = glow; }
-  const dLevel = document.getElementById('lotus-level');
-  if (dLevel) dLevel.textContent = s.level || 1;
-  const dMood = document.getElementById('lotus-mood');
-  if (dMood) dMood.textContent = s.mood || 'idle';
-  const dHp = document.getElementById('lotus-hp');
-  if (dHp) dHp.textContent = s.hp || 100;
-}, 2000);
+// ── Lotus Creature disabled — Trading Floor is now the default view ──
 </script>
 </body>
 </html>
