@@ -64,8 +64,8 @@ class TestValidateOrder:
         assert approved is False
         assert "positions reached" in reason
 
-    def test_check5_correlation_warning(self, risk_config, sample_portfolio_state, caplog):
-        """Duplicate asset should log a warning (not block in Phase 1)."""
+    def test_check5_duplicate_asset_blocked(self, risk_config, sample_portfolio_state):
+        """Duplicate asset should be rejected."""
         rm = RiskManager(risk_config)
         order = {
             "asset": "BTC",
@@ -73,8 +73,9 @@ class TestValidateOrder:
             "position_size_pct": 3.0,
             "stop_loss": 60000.0,
         }
-        rm.validate_order(order, sample_portfolio_state)
-        assert "Duplicate asset BTC" in caplog.text
+        approved, reason, _ = rm.validate_order(order, sample_portfolio_state)
+        assert approved is False
+        assert "Duplicate asset BTC" in reason
 
     def test_check6_no_stop_loss_rejected(self, risk_config, sample_portfolio_state):
         rm = RiskManager(risk_config)

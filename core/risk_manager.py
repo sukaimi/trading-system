@@ -77,11 +77,15 @@ class RiskManager:
                 None,
             )
 
-        # Check 5: Correlation check (simplified — full impl in Phase 2)
+        # Check 5: Duplicate asset prevention
         asset = execution_order.get("asset", "")
         for pos in open_positions:
             if pos.get("asset") == asset:
-                log.warning("Duplicate asset %s already in portfolio", asset)
+                return (
+                    False,
+                    f"Duplicate asset {asset} already in portfolio",
+                    None,
+                )
 
         # Check 6: Stop-loss must be defined
         if not execution_order.get("stop_loss"):

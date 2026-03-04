@@ -47,6 +47,18 @@ class TelegramNotifier:
             log.error("Telegram send failed: %s", e)
             return False
 
+    def _run_async(self, coro) -> None:
+        """Run an async coroutine from sync context, handling both threaded and async callers."""
+        import asyncio
+
+        try:
+            loop = asyncio.get_running_loop()
+            # Already inside an async context (e.g. FastAPI) — schedule as fire-and-forget task
+            loop.create_task(coro)
+        except RuntimeError:
+            # No running event loop — create one (e.g. scheduler thread)
+            asyncio.run(coro)
+
     def send_alert(self, message: str) -> None:
         """Send an alert message (sync wrapper — fires and forgets)."""
         if not self.enabled:
@@ -54,16 +66,9 @@ class TelegramNotifier:
             return
 
         try:
-            import asyncio
-
-            asyncio.get_event_loop().run_until_complete(
-                self._send_message(f"<b>ALERT</b>\n{message}")
-            )
-        except RuntimeError:
-            # No running event loop — create one
-            import asyncio
-
-            asyncio.run(self._send_message(f"<b>ALERT</b>\n{message}"))
+            self._run_async(self._send_message(f"<b>ALERT</b>\n{message}"))
+        except Exception as e:
+            log.error("Failed to send alert: %s", e)
 
     def send_daily_summary(self, summary: dict[str, Any]) -> None:
         """Send end-of-day portfolio summary."""
@@ -80,9 +85,7 @@ class TelegramNotifier:
         )
 
         try:
-            import asyncio
-
-            asyncio.run(self._send_message(text))
+            self._run_async(self._send_message(text))
         except Exception as e:
             log.error("Failed to send daily summary: %s", e)
 
@@ -101,9 +104,7 @@ class TelegramNotifier:
         )
 
         try:
-            import asyncio
-
-            asyncio.run(self._send_message(text))
+            self._run_async(self._send_message(text))
         except Exception as e:
             log.error("Failed to send weekly report: %s", e)
 
@@ -124,9 +125,7 @@ class TelegramNotifier:
         )
 
         try:
-            import asyncio
-
-            asyncio.run(self._send_message(text))
+            self._run_async(self._send_message(text))
         except Exception as e:
             log.error("Failed to send circuit breaker alert: %s", e)
 
@@ -151,8 +150,6 @@ class TelegramNotifier:
         lines.append(f"\nStrategy version: v{version}")
 
         try:
-            import asyncio
-
-            asyncio.run(self._send_message("\n".join(lines)))
+            self._run_async(self._send_message("\n".join(lines)))
         except Exception as e:
             log.error("Failed to send optimization summary: %s", e)

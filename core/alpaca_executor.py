@@ -179,7 +179,7 @@ class AlpacaExecutor:
         return {
             "type": "order_confirmation",
             "timestamp": datetime.now(timezone.utc).isoformat(),
-            "order_id": self._next_order_id(),
+            "order_id": order_id,
             "asset": asset,
             "direction": direction,
             "quantity": filled_qty,

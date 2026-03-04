@@ -81,13 +81,9 @@ class TestCheckFatalFlaws:
         flaws = devil.check_fatal_flaws(valid_thesis, healthy_portfolio)
         assert any("daily loss" in f.lower() for f in flaws)
 
-    def test_duplicate_asset_not_fatal(self, devil, valid_thesis, healthy_portfolio):
-        """Duplicate asset is no longer a fatal flaw — it should be a warning instead."""
+    def test_duplicate_asset_warning_detected(self, devil, valid_thesis, healthy_portfolio):
+        """Duplicate asset is detected by _duplicate_asset_warning (used as fatal flaw in challenge)."""
         healthy_portfolio["open_positions"] = [{"asset": "BTC"}]
-        flaws = devil.check_fatal_flaws(valid_thesis, healthy_portfolio)
-        # No fatal flaw for duplicate asset
-        assert not any("duplicate" in f.lower() for f in flaws)
-        # But warning is returned by the separate method
         warning = devil._duplicate_asset_warning(valid_thesis, healthy_portfolio)
         assert warning is not None
         assert "BTC" in warning

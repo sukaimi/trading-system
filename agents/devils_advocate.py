@@ -151,10 +151,18 @@ class DevilsAdvocate:
         confidence_adjusted = float(result.get("confidence_adjusted", trade_thesis.confidence * 0.9))
         modifications = result.get("modifications", [])
 
-        # Inject duplicate-asset warning as a modification, not a fatal flaw
+        # Duplicate asset is a fatal flaw — prevents position stacking
         if dup_warning:
-            modifications.append(dup_warning)
-            log.info("Duplicate asset warning: %s", dup_warning)
+            log.info("Fatal flaw: %s", dup_warning)
+            return DevilsVerdict(
+                original_thesis_id=thesis_id,
+                verdict=Verdict.KILLED,
+                challenges=challenges,
+                flags_raised=flags + 1,
+                fatal_flaws=[dup_warning],
+                confidence_adjusted=0.0,
+                final_reasoning=f"Duplicate asset blocked: {dup_warning}",
+            )
 
         kill_threshold = self._params.get("kill_thresholds", {}).get(
             "min_challenges_for_kill", 6
