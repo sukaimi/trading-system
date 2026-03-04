@@ -35,14 +35,15 @@ Emergency: CircuitBreaker → halt trading
 ```
 trading-system/
 ├── agents/          # 6 agent modules
-├── core/            # 12 core modules (schemas, llm_client, pipeline, portfolio, risk_manager,
-│                    #   executor, heartbeat, logger, self_optimizer, alpaca_executor,
-│                    #   cost_tracker, event_bus, paper_executor)
+├── core/            # 15 core modules (schemas, llm_client, pipeline, portfolio, risk_manager,
+│                    #   executor, routing_executor, coinbase_executor, alpaca_executor,
+│                    #   heartbeat, logger, self_optimizer, cost_tracker, event_bus,
+│                    #   ga4_tracker, paper_executor)
 ├── tools/           # 5 tools (news_fetcher, market_data, technical_indicators, correlation, telegram_bot)
 ├── dashboard/       # FastAPI dashboard server + static files (index.html, agent-floor.html, lotus-creature.js)
 ├── config/          # Dynamic params JSON (updated weekly by SelfOptimizer)
 ├── data/            # Persisted state, trade journal, logs, weekly reviews (gitignored)
-├── tests/           # 20 test files, 272 tests (pytest)
+├── tests/           # 23 test files, 305 tests (pytest)
 ├── docs/            # PRD, Lotus spec
 ├── main.py          # Entry point — 8-task scheduler + dashboard
 └── requirements.txt
@@ -52,8 +53,11 @@ trading-system/
 - `main.py` — Entry point, scheduler, executor selection (paper/alpaca/ibkr)
 - `core/pipeline.py` — Signal-to-execution orchestration + `check_stop_losses()`
 - `core/alpaca_executor.py` — Alpaca paper/live trading executor
+- `core/coinbase_executor.py` — Coinbase Advanced Trade API crypto executor (BTC, ETH)
+- `core/routing_executor.py` — Smart routing: crypto→Coinbase, stocks/ETFs→Alpaca (EXECUTOR_MODE=live)
 - `core/cost_tracker.py` — LLM cost tracking with JSON persistence + daily budget limits (`check_budget()`)
-- `core/event_bus.py` — Real-time pub/sub for dashboard WebSocket
+- `core/event_bus.py` — Real-time pub/sub for dashboard WebSocket + sync listeners
+- `core/ga4_tracker.py` — GA4 Measurement Protocol server-side event tracking
 - `core/portfolio.py` — Thread-safe portfolio state with JSON persistence
 - `dashboard/server.py` — FastAPI server (REST + WebSocket)
 - `dashboard/static/index.html` — Dashboard UI + Agent Trading Floor (two-view toggle, Lotus disabled)
@@ -64,7 +68,7 @@ trading-system/
 ## Development Commands
 ```bash
 source venv/bin/activate
-pytest tests/ -v                        # Run all 272 tests
+pytest tests/ -v                        # Run all 305 tests
 pytest tests/test_stop_loss_monitor.py -v  # Run specific test file
 python main.py                          # Start full system (scheduler + dashboard on :8080)
 ```
@@ -97,8 +101,9 @@ journalctl -u trading-system -f         # Live logs
 All API keys in `.env` (never committed). See `.env.example` for template.
 Required: DEEPSEEK_API_KEY, ANTHROPIC_API_KEY, TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID
 Required: ALPACA_API_KEY, ALPACA_SECRET_KEY, ALPACA_BASE_URL, EXECUTOR_MODE
+Required (live mode): COINBASE_API_KEY, COINBASE_API_SECRET
 Optional: KIMI_API_KEY (disabled), GOOGLE_API_KEY (fallback), ALPHA_VANTAGE_API_KEY, CRYPTOCOMPARE_API_KEY
-Optional: DASHBOARD_PORT (default 8080)
+Optional: DASHBOARD_PORT (default 8080), GA4_MEASUREMENT_ID, GA4_API_SECRET
 
 ## Conventions
 - All inter-agent communication uses strict JSON (Pydantic v2 validated)
@@ -176,8 +181,28 @@ Optional: DASHBOARD_PORT (default 8080)
 - **Always enable UFW**: Default deny incoming, allow only needed ports (22, 443, 9000).
 - **Install fail2ban**: Protects SSH from brute-force attacks.
 
+### Coinbase Limitations
+- **No paper trading**: Coinbase Advanced Trade API has no sandbox. For paper trading, use `EXECUTOR_MODE=paper` or `EXECUTOR_MODE=alpaca` with paper URL.
+- **API key format**: Coinbase uses CDP API keys (format: `organizations/{org_id}/apiKeys/{key_id}`) with EC private key secrets. NOT the legacy API keys.
+- **Market orders only**: CoinbaseExecutor supports market orders only. No stop/limit orders — the software stop-loss monitor handles stops.
+- **Singapore crypto restriction**: Alpaca cannot legally execute crypto for Singapore residents. Use `EXECUTOR_MODE=live` to route crypto→Coinbase, stocks/ETFs→Alpaca.
+
+### Multi-Tenant Deployment
+- Each user gets their own VPS with their own `.env` file (same git repo)
+- `EXECUTOR_MODE` controls which executors are active per instance
+- API keys (Alpaca, Coinbase, LLM, Telegram) are all per-user via `.env`
+- GA tracking: use a separate Google Analytics property per user
+- Data files (`data/`) are per-VPS, no namespacing needed
+
 ### Dashboard Scheduler
 - **Countdown showed 0m 0s**: `schedule` library's `job.next_run` is a naive datetime (UTC on VPS). `isoformat()` without `Z` suffix causes JavaScript to parse as browser local time, creating timezone offset. Fixed by appending `Z` in `/api/scheduler` endpoint.
+
+### Google Analytics
+- **Dynamic injection**: `GA4_MEASUREMENT_ID` and `GA4_API_SECRET` are read from `.env`. HTML templates use `{{GA4_MEASUREMENT_ID}}` placeholder, replaced by `server.py` at serve time.
+- **Client-side (gtag.js)**: Installed in `index.html` and `agent-floor.html` `<head>` — page views, user sessions
+- **Server-side (Measurement Protocol)**: `core/ga4_tracker.py` subscribes to `event_bus` and forwards trade events to `POST https://www.google-analytics.com/mp/collect`. Events: `trade_signal`, `trade_executed`, `stop_loss_triggered`, `circuit_breaker_triggered`, `system_startup`, `agent_escalation`
+- **Multi-tenant**: Each tenant must have their own GA property. Set `GA4_MEASUREMENT_ID` and `GA4_API_SECRET` in each tenant's `.env`. Do NOT reuse across deployments — traffic will be mixed.
+- **Sukaimi's property**: `G-3DWEFFH8S4` / `1n7J8BhAQiC_R_rXhkvWrA` (set in VPS `.env`, not hardcoded)
 
 ## Cost Budget
 - Paper trading: ~$1/month (DeepSeek + Sonnet, Kimi disabled)

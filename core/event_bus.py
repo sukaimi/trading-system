@@ -27,12 +27,17 @@ class EventBus:
                 inst._loop: asyncio.AbstractEventLoop | None = None
                 inst._recent: list[dict[str, Any]] = []
                 inst._max_recent = 200
+                inst._listeners: list = []
                 cls._instance = inst
             return cls._instance
 
     def set_loop(self, loop: asyncio.AbstractEventLoop) -> None:
         """Set the asyncio loop used by the FastAPI thread."""
         self._loop = loop
+
+    def add_listener(self, callback) -> None:
+        """Register a synchronous listener called on every emit."""
+        self._listeners.append(callback)
 
     def subscribe(self) -> asyncio.Queue:
         """Register a new WebSocket client. Returns a queue to await on."""
@@ -59,6 +64,13 @@ class EventBus:
         self._recent.append(event)
         if len(self._recent) > self._max_recent:
             self._recent = self._recent[-self._max_recent:]
+
+        # Notify sync listeners (e.g. GA4 tracker)
+        for listener in self._listeners:
+            try:
+                listener(event)
+            except Exception:
+                pass
 
         # Push to all subscriber queues
         if self._loop is None:

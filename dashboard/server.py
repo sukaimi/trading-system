@@ -22,6 +22,9 @@ DASHBOARD_DIR = os.path.dirname(__file__)
 DATA_DIR = os.path.join(os.path.dirname(DASHBOARD_DIR), "data")
 CONFIG_DIR = os.path.join(os.path.dirname(DASHBOARD_DIR), "config")
 
+def _ga4_id() -> str:
+    return os.getenv("GA4_MEASUREMENT_ID", "")
+
 app = FastAPI(title="Trading Dashboard", docs_url=None, redoc_url=None)
 app.mount(
     "/static",
@@ -49,14 +52,16 @@ def _set_refs(portfolio: Any, heartbeat: Any, cost_tracker: Any) -> None:
 async def index() -> HTMLResponse:
     html_path = os.path.join(DASHBOARD_DIR, "static", "index.html")
     with open(html_path) as f:
-        return HTMLResponse(content=f.read())
+        content = f.read().replace("{{GA4_MEASUREMENT_ID}}", _ga4_id())
+    return HTMLResponse(content=content)
 
 
 @app.get("/agents", response_class=HTMLResponse)
 async def agent_floor() -> HTMLResponse:
     html_path = os.path.join(DASHBOARD_DIR, "static", "agent-floor.html")
     with open(html_path) as f:
-        return HTMLResponse(content=f.read())
+        content = f.read().replace("{{GA4_MEASUREMENT_ID}}", _ga4_id())
+    return HTMLResponse(content=content)
 
 
 @app.get("/api/portfolio")

@@ -62,7 +62,10 @@ def main():
     log.info("Risk manager initialized")
 
     executor_mode = os.getenv("EXECUTOR_MODE", "paper").lower()
-    if executor_mode == "alpaca":
+    if executor_mode == "live":
+        from core.routing_executor import RoutingExecutor
+        executor = RoutingExecutor()
+    elif executor_mode == "alpaca":
         executor = AlpacaExecutor()
     elif executor_mode == "ibkr":
         executor = Executor()
@@ -191,11 +194,15 @@ def main():
     signal.signal(signal.SIGINT, _shutdown)
     signal.signal(signal.SIGTERM, _shutdown)
 
-    # 11. Start dashboard server
+    # 11. Start GA4 tracker (server-side analytics)
+    from core.ga4_tracker import ga4_tracker
+    ga4_tracker.start()
+
+    # 12. Start dashboard server
     dashboard_port = int(os.getenv("DASHBOARD_PORT", "8080"))
     start_dashboard(portfolio, heartbeat, cost_tracker, port=dashboard_port)
 
-    # 12. Pre-flight API connectivity check
+    # 13. Pre-flight API connectivity check
     if not llm_client.mock_mode:
         log.info("Pre-flight: testing LLM API keys...")
         for name, test_fn in [
@@ -209,14 +216,14 @@ def main():
             else:
                 log.info("PRE-FLIGHT OK: %s", name)
 
-    # 13. Run initial checks
+    # 14. Run initial checks
     log.info("Running initial heartbeat check...")
     run_heartbeat()
 
     log.info("Running initial news scan...")
     run_news_scan()
 
-    # 14. Event loop
+    # 15. Event loop
     log.info("Trading system started — entering main loop")
     try:
         while _running:
@@ -225,7 +232,7 @@ def main():
     except KeyboardInterrupt:
         pass
 
-    # 15. Cleanup
+    # 16. Cleanup
     log.info("Persisting portfolio state...")
     portfolio.persist()
     log.info("Trading system stopped")
