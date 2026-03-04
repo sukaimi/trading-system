@@ -25,7 +25,8 @@ class CoinbaseExecutor:
 
     def __init__(self) -> None:
         self._api_key = os.getenv("COINBASE_API_KEY", "")
-        self._api_secret = os.getenv("COINBASE_API_SECRET", "")
+        # python-dotenv stores \n as literal chars; PEM needs real newlines
+        self._api_secret = os.getenv("COINBASE_API_SECRET", "").replace("\\n", "\n")
         self.paper_mode = False
         self._order_counter = 0
         self._lock = threading.Lock()
