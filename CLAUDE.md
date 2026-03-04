@@ -8,7 +8,7 @@ Autonomous multi-agent AI trading system for BTC, ETH, GLDM (gold), SLV (silver)
 **Stack**: Python 3.12 / Direct LLM API calls / Ubuntu 24.04 VPS
 **Executor**: Alpaca (paper trading) — not IBKR
 **PRD**: `docs/TRADING_AGENT_PRD.md`
-**Dashboard**: `https://tradebot.codeandcraft.ai` — Lotus creature + trading dashboard
+**Dashboard**: `https://tradebot.codeandcraft.ai` — Agent Trading Floor + trading dashboard
 **Repo**: `https://github.com/sukaimi/trading-system`
 
 ## Architecture
@@ -39,7 +39,7 @@ trading-system/
 │                    #   executor, heartbeat, logger, self_optimizer, alpaca_executor,
 │                    #   cost_tracker, event_bus, paper_executor)
 ├── tools/           # 5 tools (news_fetcher, market_data, technical_indicators, correlation, telegram_bot)
-├── dashboard/       # FastAPI dashboard server + static files (index.html, lotus-creature.js)
+├── dashboard/       # FastAPI dashboard server + static files (index.html, agent-floor.html, lotus-creature.js)
 ├── config/          # Dynamic params JSON (updated weekly by SelfOptimizer)
 ├── data/            # Persisted state, trade journal, logs, weekly reviews (gitignored)
 ├── tests/           # 20 test files, 272 tests (pytest)
@@ -56,8 +56,9 @@ trading-system/
 - `core/event_bus.py` — Real-time pub/sub for dashboard WebSocket
 - `core/portfolio.py` — Thread-safe portfolio state with JSON persistence
 - `dashboard/server.py` — FastAPI server (REST + WebSocket)
-- `dashboard/static/index.html` — Dashboard UI + Lotus creature (two-view toggle)
-- `dashboard/static/lotus-creature.js` — Animated canvas creature engine (6 stages)
+- `dashboard/static/index.html` — Dashboard UI + Agent Trading Floor (two-view toggle, Lotus disabled)
+- `dashboard/static/agent-floor.html` — Isometric Agent Trading Floor with live data (served at `/agents`)
+- `dashboard/static/lotus-creature.js` — Animated canvas creature engine (6 stages, currently disabled)
 - `config/risk_params.json` — Risk limits (max position 7%, daily loss 5%, drawdown 15%)
 
 ## Development Commands
@@ -116,10 +117,12 @@ Optional: DASHBOARD_PORT (default 8080)
 - [x] **Phase 2: Intelligence Layer** — LLM client, all agents, pipeline, tools
 - [x] **Phase 3: Tier 3 Intelligence** — Weekly Strategist, Circuit Breaker, Self-Optimizer
 - [x] **Phase 4: Paper Trading** — Alpaca executor, stop-loss monitor, dashboard, Lotus creature, VPS deployment
+- [x] **Agent Trading Floor** — Isometric visualization with 9 agents + 4 NPC interns, live data from APIs + WebSocket
 
 ### Current Phase: Paper Trading
 - Running on VPS with Alpaca paper account
 - Monitoring trades, agent decisions, costs
+- Homepage: Agent Trading Floor (isometric, live market data, real-time agent animations)
 
 ### Pending
 - [ ] **Phase 5: Optimization** — Analyze paper trading data, tune parameters (needs 10-20+ trades)
@@ -153,6 +156,10 @@ Optional: DASHBOARD_PORT (default 8080)
 - **WebSocket null guard**: When creating `LotusCreature` with `wsUrl: null`, the `_connectWS()` method must guard against `new WebSocket(null)` which crashes. Fixed with `if (!this.opts.wsUrl) return;`.
 - **Palette glow is an array**: `getState().palette.glow` returns `[r,g,b]` array, not a CSS color string. Must convert to `rgb(r,g,b)` before using in `style.color`.
 - **Canvas background mismatch**: When canvas is smaller than viewport, the page background color doesn't match the canvas radial gradient. Fix: stretch canvas to fill viewport with `position: absolute; width: 100%; height: 100%`.
+- **Agent Trading Floor**: Homepage is now an isometric canvas visualization (`agent-floor.html`) embedded in `index.html` via iframe. Lotus creature is disabled but code preserved.
+- **Market API returns nested objects**: `/api/market` returns `{BTC: {price: 71529, ...}}` not flat numbers. Agent floor flattens to `{BTC: 71529}` in `fetchLiveData()`.
+- **Agent floor live data**: Polls `/api/market`, `/api/price-history`, `/api/equity-history`, `/api/portfolio` every 30s. WebSocket `/ws` events trigger real-time agent walking animations mapped via `EVENT_TO_ANIMATION`.
+- **Isometric left wall text direction**: Left wall (gx=0) parallelogram follows wall slope, but text content uses `-ux,-uy` transform and reversed `sPos()` so text faces room interior (readable by agents inside the office).
 
 ### Cost Tracking
 - **CostTracker was in-memory only**: Costs reset on every restart. Fixed by adding JSON persistence to `data/cost_state.json`. Now survives restarts.
