@@ -25,7 +25,7 @@ CONFIG_DIR = os.path.join(os.path.dirname(DASHBOARD_DIR), "config")
 def _ga4_id() -> str:
     return os.getenv("GA4_MEASUREMENT_ID", "")
 
-app = FastAPI(title="Trading Dashboard", docs_url=None, redoc_url=None)
+app = FastAPI(title="Trading Dashboard", docs_url=None, redoc_url=None, openapi_url=None)
 app.mount(
     "/static",
     StaticFiles(directory=os.path.join(DASHBOARD_DIR, "static")),
@@ -172,8 +172,49 @@ async def get_config() -> dict[str, Any]:
 
 # ── WebSocket — live event streaming ───────────────────────────────────
 
+_MAX_WS_CONNECTIONS = 20
+_ws_count = 0
+_ws_lock = threading.Lock()
+
+_ALLOWED_ORIGINS: set[str] = set()
+
+
+def _allowed_ws_origin(origin: str | None) -> bool:
+    """Check if WebSocket origin is allowed."""
+    if not _ALLOWED_ORIGINS:
+        return True  # No restriction configured
+    if not origin:
+        return False
+    return any(origin.startswith(a) for a in _ALLOWED_ORIGINS)
+
+
+def _init_allowed_origins() -> None:
+    """Build allowed origins from DASHBOARD_ALLOWED_ORIGINS env var."""
+    raw = os.getenv("DASHBOARD_ALLOWED_ORIGINS", "")
+    if raw:
+        _ALLOWED_ORIGINS.update(o.strip() for o in raw.split(",") if o.strip())
+
+
+_init_allowed_origins()
+
+
 @app.websocket("/ws")
 async def websocket_endpoint(ws: WebSocket) -> None:
+    global _ws_count
+
+    # Origin check
+    origin = ws.headers.get("origin")
+    if not _allowed_ws_origin(origin):
+        await ws.close(code=4003, reason="Origin not allowed")
+        return
+
+    # Connection limit
+    with _ws_lock:
+        if _ws_count >= _MAX_WS_CONNECTIONS:
+            await ws.close(code=4029, reason="Too many connections")
+            return
+        _ws_count += 1
+
     await ws.accept()
     queue = event_bus.subscribe()
     try:
@@ -186,6 +227,8 @@ async def websocket_endpoint(ws: WebSocket) -> None:
         log.warning("WebSocket error: %s", e)
     finally:
         event_bus.unsubscribe(queue)
+        with _ws_lock:
+            _ws_count -= 1
 
 
 # ── Helpers ────────────────────────────────────────────────────────────
@@ -242,7 +285,7 @@ def start_dashboard(
     portfolio: Any,
     heartbeat: Any,
     cost_tracker: Any,
-    host: str = "0.0.0.0",
+    host: str = "127.0.0.1",
     port: int = 8080,
 ) -> threading.Thread:
     """Start the dashboard server in a background daemon thread."""

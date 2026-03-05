@@ -85,9 +85,21 @@ Services:
 Auto-deploy: git push → GitHub webhook → VPS pulls + restarts
 Deploy script: /opt/deploy.sh
 SSL: Let's Encrypt, auto-renews via certbot timer
-Firewall (UFW): ports 22 (SSH), 443 (HTTPS), 9000 (webhook)
+Firewall (UFW): ports 22 (SSH), 443 (HTTPS), 9000 (GitHub IPs only)
 Fail2ban: active on SSH
 ```
+
+### Security Hardening
+- **Port 8080 closed**: Uvicorn binds to `127.0.0.1` only, UFW blocks external access. All traffic goes through nginx.
+- **Port 9000 restricted**: Webhook port only accepts connections from GitHub IP ranges (`140.82.112.0/20`, `185.199.108.0/22`, `192.30.252.0/22`, `143.55.64.0/20`)
+- **HTTP Basic Auth**: Entire dashboard behind nginx Basic Auth (`/etc/nginx/.htpasswd`, username: `trader`)
+- **Security headers**: HSTS, X-Frame-Options (SAMEORIGIN), X-Content-Type-Options, CSP, Referrer-Policy, Permissions-Policy
+- **Server tokens**: `server_tokens off` — nginx version not disclosed
+- **OpenAPI schema**: Disabled (`openapi_url=None`) — `/openapi.json` returns 404
+- **WebSocket**: Max 20 concurrent connections, origin validation via `DASHBOARD_ALLOWED_ORIGINS` env var
+- **HTTP/2**: Enabled in nginx (`listen 443 ssl http2`)
+- **Gzip**: Enabled for JSON, JS, CSS, XML responses
+- **Hardening script**: `scripts/harden-vps.sh` — run on VPS to apply all nginx/UFW changes
 
 ### Manual VPS commands
 ```bash
@@ -95,6 +107,8 @@ ssh trader@VPS_IP
 sudo systemctl status trading-system    # Check status
 sudo systemctl restart trading-system   # Restart
 journalctl -u trading-system -f         # Live logs
+bash scripts/harden-vps.sh             # Apply security hardening
+sudo htpasswd /etc/nginx/.htpasswd trader  # Reset dashboard password
 ```
 
 ## Environment Variables
@@ -103,7 +117,7 @@ Required: DEEPSEEK_API_KEY, ANTHROPIC_API_KEY, TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT
 Required: ALPACA_API_KEY, ALPACA_SECRET_KEY, ALPACA_BASE_URL, EXECUTOR_MODE
 Required (live mode): COINBASE_API_KEY, COINBASE_API_SECRET
 Optional: KIMI_API_KEY (disabled), GOOGLE_API_KEY (fallback), ALPHA_VANTAGE_API_KEY, CRYPTOCOMPARE_API_KEY
-Optional: DASHBOARD_PORT (default 8080), GA4_MEASUREMENT_ID, GA4_API_SECRET
+Optional: DASHBOARD_PORT (default 8080), DASHBOARD_ALLOWED_ORIGINS, GA4_MEASUREMENT_ID, GA4_API_SECRET
 
 ## Conventions
 - All inter-agent communication uses strict JSON (Pydantic v2 validated)
