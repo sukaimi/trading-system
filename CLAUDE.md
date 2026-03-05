@@ -28,7 +28,7 @@ Heartbeat (5 min): health check → stop-loss monitor → circuit breaker
 News scan (30 min): full pipeline
 3 daily sessions: Asian Open (00:00 UTC), European Overlap (08:00), US Close (14:00)
 Weekly: Strategist + SelfOptimizer → rewrite agent params
-Emergency: CircuitBreaker → halt trading
+Emergency: CircuitBreaker → halt trading → auto-recovery after 6h cooldown
 ```
 
 ## Project Structure
@@ -185,7 +185,7 @@ Optional: DASHBOARD_PORT (default 8080), DASHBOARD_ALLOWED_ORIGINS, GA4_MEASUREM
 - **CostTracker was in-memory only**: Costs reset on every restart. Fixed by adding JSON persistence to `data/cost_state.json`. Now survives restarts.
 - **Standalone dashboard loses costs**: Starting dashboard independently (not through `main.py`) means `_cost_tracker` is None. Always run via `main.py`.
 - **Circuit breaker burned $0.44 in 2 days**: No cooldown/dedup on `escalate_to_opus()` — every 5-min heartbeat re-fired identical Opus calls at $0.04 each when stale portfolio data persisted. Fixed with 4 guards:
-  - Pipeline: `run_circuit_breaker_check()` skips entirely when `portfolio.halted` is True
+  - Pipeline: `run_circuit_breaker_check()` triggers auto-recovery after 6h cooldown (configurable via `auto_recovery_cooldown_hours` in `risk_params.json`). Resets peak equity, unhalts, sends Telegram alert.
   - Circuit breaker: 1-hour cooldown + trigger dedup on Opus calls (cached decision reuse)
   - Pre-flight: minimal `max_tokens=5` ping instead of full JSON prompt
   - CostTracker: `check_budget()` with daily per-provider limits ($0.15/day Anthropic hard cap), enforced in `LLMClient.call_anthropic()` before every API call
