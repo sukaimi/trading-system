@@ -92,7 +92,7 @@ Fail2ban: active on SSH
 ### Security Hardening
 - **Port 8080 closed**: Uvicorn binds to `127.0.0.1` only, UFW blocks external access. All traffic goes through nginx.
 - **Port 9000 restricted**: Webhook port only accepts connections from GitHub IP ranges (`140.82.112.0/20`, `185.199.108.0/22`, `192.30.252.0/22`, `143.55.64.0/20`)
-- **HTTP Basic Auth**: Entire dashboard behind nginx Basic Auth (`/etc/nginx/.htpasswd`, username: `trader`)
+- **HTTP Basic Auth**: Dashboard and private API behind nginx Basic Auth (`/etc/nginx/.htpasswd`, username: `trader`). Public routes (no auth): `/agents`, `/static/`, `/ws`, `/api/(market|price-history|equity-history|portfolio|events/recent)`
 - **Security headers**: HSTS, X-Frame-Options (SAMEORIGIN), X-Content-Type-Options, CSP, Referrer-Policy, Permissions-Policy
 - **Server tokens**: `server_tokens off` — nginx version not disclosed
 - **OpenAPI schema**: Disabled (`openapi_url=None`) — `/openapi.json` returns 404
