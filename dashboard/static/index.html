@@ -588,6 +588,9 @@ body::after {
   border-bottom: 1px solid var(--border);
 }
 .journal-table tr:hover { background: var(--panel-alt); }
+.journal-table tr.row-executed { background: rgba(63,185,80,0.08); }
+.journal-table tr.row-killed { background: rgba(248,81,73,0.08); }
+.journal-table tr.row-no_trade { background: rgba(139,148,158,0.05); }
 .journal-scroll { max-height: 300px; overflow-y: auto; scrollbar-width: thin; scrollbar-color: var(--border) transparent; }
 .outcome-badge {
   font-size: 10px;
@@ -1608,7 +1611,7 @@ function renderJournal() {
     const pnl = e.outcome && typeof e.outcome === 'object' && e.outcome.pnl_usd != null
       ? (e.outcome.pnl_usd >= 0 ? '+' : '') + '$' + Number(e.outcome.pnl_usd).toFixed(2)
       : '';
-    return `<tr>
+    return `<tr class="row-${outcomeClass}">
       <td>${fmtTime(e.timestamp_open || e.timestamp || '')}</td>
       <td style="color:var(--blue);font-weight:600">${esc(e.asset || '')}</td>
       <td>${esc(e.direction || '')}</td>
