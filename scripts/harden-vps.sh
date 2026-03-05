@@ -95,15 +95,16 @@ server {
     add_header Permissions-Policy "camera=(), microphone=(), geolocation=()" always;
     add_header Content-Security-Policy "default-src 'self'; script-src 'self' 'unsafe-inline' https://www.googletagmanager.com https://www.google-analytics.com; connect-src 'self' wss://tradebot.codeandcraft.ai https://www.google-analytics.com; style-src 'self' 'unsafe-inline'; img-src 'self' data:; frame-src 'self';" always;
 
-    # HTTP Basic Auth for the entire site
+    # Default: require Basic Auth
     auth_basic "Trading Dashboard";
     auth_basic_user_file /etc/nginx/.htpasswd;
 
     # Rate limiting zone (defined in nginx.conf http block)
     # limit_req zone=dashboard burst=20 nodelay;
 
-    # Proxy to uvicorn (localhost only)
-    location / {
+    # Agent Trading Floor — public (no auth)
+    location = /agents {
+        auth_basic off;
         proxy_pass http://127.0.0.1:8080;
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
@@ -111,8 +112,29 @@ server {
         proxy_set_header X-Forwarded-Proto $scheme;
     }
 
-    # WebSocket support
+    # Static assets — public (needed by agent floor)
+    location /static/ {
+        auth_basic off;
+        proxy_pass http://127.0.0.1:8080;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+
+    # Public API endpoints (agent floor needs these for live data)
+    location ~ ^/api/(market|price-history|equity-history|portfolio|events/recent)$ {
+        auth_basic off;
+        proxy_pass http://127.0.0.1:8080;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+
+    # WebSocket — public (agent floor uses it for live updates)
     location /ws {
+        auth_basic off;
         proxy_pass http://127.0.0.1:8080/ws;
         proxy_http_version 1.1;
         proxy_set_header Upgrade $http_upgrade;
@@ -122,6 +144,15 @@ server {
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
         proxy_set_header X-Forwarded-Proto $scheme;
         proxy_read_timeout 86400;
+    }
+
+    # Dashboard + API — behind Basic Auth
+    location / {
+        proxy_pass http://127.0.0.1:8080;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
     }
 
     # Gzip compression for JSON and JS
