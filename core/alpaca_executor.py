@@ -104,18 +104,22 @@ class AlpacaExecutor:
             "time_in_force": "gtc" if is_crypto else "day",
         }
 
-        # Crypto uses notional (dollar amount) for small orders, stocks use qty
+        # Crypto uses notional for buys, qty for sells; stocks use qty
         if is_crypto:
-            # Convert qty to dollar value and use notional for Alpaca
-            price = self._get_last_price(symbol)
-            notional = round(quantity * price, 2) if price > 0 else 0
+            if side == "sell":
+                # Close orders: send exact base quantity to avoid notional rounding mismatch
+                payload["qty"] = str(quantity)
+            else:
+                # Open orders: use notional (dollar amount) for position sizing
+                price = self._get_last_price(symbol)
+                notional = round(quantity * price, 2) if price > 0 else 0
 
-            if notional < 10:
-                # Alpaca minimum is $10 for crypto
-                notional = 10.0
-                log.info("Adjusted notional to $10 minimum for %s", symbol)
+                if notional < 10:
+                    # Alpaca minimum is $10 for crypto
+                    notional = 10.0
+                    log.info("Adjusted notional to $10 minimum for %s", symbol)
 
-            payload["notional"] = str(notional)
+                payload["notional"] = str(notional)
         else:
             # Stocks: round to whole shares
             qty_int = max(1, int(round(quantity)))

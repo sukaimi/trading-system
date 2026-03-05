@@ -6,5 +6,6 @@
   "max_correlation": 0.50,
   "stop_loss_atr_mult": 2.0,
   "base_risk_per_trade_pct": 2.0,
-  "circuit_breaker_drawdown_pct": 25.0
+  "circuit_breaker_drawdown_pct": 25.0,
+  "default_stop_loss_pct": 3.0
 }

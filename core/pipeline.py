@@ -919,13 +919,14 @@ class TradingPipeline:
             except Exception:
                 pass
 
-        # Default stop-loss if none provided: 5% adverse move
+        # Default stop-loss if none provided: use config or 3% adverse move
         if stop_loss is None and current_price > 0:
+            sl_pct = self._risk_params.get("default_stop_loss_pct", 3.0) / 100.0
             if thesis.direction.value == "long":
-                stop_loss = round(current_price * 0.95, 2)
+                stop_loss = round(current_price * (1 - sl_pct), 2)
             else:
-                stop_loss = round(current_price * 1.05, 2)
-            log.info("Default stop-loss set at $%.2f (5%% from $%.2f)", stop_loss, current_price)
+                stop_loss = round(current_price * (1 + sl_pct), 2)
+            log.info("Default stop-loss set at $%.2f (%.0f%% from $%.2f)", stop_loss, sl_pct * 100, current_price)
         # Calculate take-profit from risk/reward ratio + stop-loss distance
         take_profit = None
         if stop_loss and current_price > 0:
