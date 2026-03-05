@@ -43,7 +43,7 @@ trading-system/
 ├── dashboard/       # FastAPI dashboard server + static files (index.html, agent-floor.html, lotus-creature.js)
 ├── config/          # Dynamic params JSON (updated weekly by SelfOptimizer)
 ├── data/            # Persisted state, trade journal, logs, weekly reviews (gitignored)
-├── tests/           # 25 test files, 305 tests (pytest)
+├── tests/           # 26 test files, 308 tests (pytest)
 ├── docs/            # PRD, Lotus spec
 ├── main.py          # Entry point — 8-task scheduler + dashboard
 └── requirements.txt
@@ -68,7 +68,7 @@ trading-system/
 ## Development Commands
 ```bash
 source venv/bin/activate
-pytest tests/ -v                        # Run all 305 tests
+pytest tests/ -v                        # Run all 308 tests
 pytest tests/test_stop_loss_monitor.py -v  # Run specific test file
 python main.py                          # Start full system (scheduler + dashboard on :8080)
 ```
@@ -158,6 +158,7 @@ Optional: DASHBOARD_PORT (default 8080), DASHBOARD_ALLOWED_ORIGINS, GA4_MEASUREM
 - **Crypto stop orders not supported**: Alpaca returns `{"code":40010001,"message":"invalid order type for crypto order"}` for stop/stop_limit orders on crypto. This is why we built the software stop-loss monitor.
 - **Minimum $10 for crypto**: Crypto orders must use notional ordering with minimum $10. Tiny qty orders fail.
 - **Price API returns $0 for crypto**: Alpaca's data API (`/v2/assets/{symbol}/bars`) often returns 0 for crypto prices. Use CoinGecko fallback via `MarketDataFetcher`.
+- **Crypto close orders must use qty, not notional**: When closing a crypto position, using `notional` (dollar amount) causes Alpaca to reject with "insufficient balance" because the notional→qty conversion at a different price produces a slightly different quantity than what's held. Fix: crypto sells use `qty` param (exact base quantity), crypto buys use `notional`.
 
 ### Kimi API
 - **International vs Chinese endpoint**: Keys from `platform.moonshot.ai` (international) use `api.moonshot.ai/v1`. Keys from Chinese platform use `api.moonshot.cn/v1`. They are NOT interchangeable — wrong endpoint gives 401.
