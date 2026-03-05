@@ -9,6 +9,7 @@ See TRADING_AGENT_PRD.md Section 4 for the communication map.
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from datetime import datetime, timezone
 from typing import Any
 
 from agents.chart_analyst import ChartAnalyst
@@ -620,7 +621,7 @@ class TradingPipeline:
     def run_circuit_breaker_check(self, market_data: dict[str, Any] | None = None) -> None:
         """Run circuit breaker check against current portfolio state."""
         if self._portfolio.halted:
-            log.info("System already halted — skipping circuit breaker check")
+            self._try_auto_recovery()
             return
 
         try:
@@ -642,6 +643,62 @@ class TradingPipeline:
                 self._circuit_breaker.execute_decision(decision)
         except Exception as e:
             log.error("Circuit breaker check failed: %s", e)
+
+    _AUTO_RECOVERY_COOLDOWN_HOURS = 6
+
+    def _try_auto_recovery(self) -> None:
+        """Auto-recover from circuit breaker halt after cooldown period."""
+        try:
+            cooldown_hours = self._risk_params.get(
+                "auto_recovery_cooldown_hours", self._AUTO_RECOVERY_COOLDOWN_HOURS
+            )
+            last_updated = self._portfolio.last_updated
+            if not last_updated:
+                return
+
+            halted_at = datetime.fromisoformat(last_updated.replace("Z", "+00:00"))
+            now = datetime.now(timezone.utc)
+            if halted_at.tzinfo is None:
+                halted_at = halted_at.replace(tzinfo=timezone.utc)
+
+            hours_since = (now - halted_at).total_seconds() / 3600
+
+            if hours_since < cooldown_hours:
+                log.info(
+                    "System halted — auto-recovery in %.1f hours (%.1f/%d hours elapsed)",
+                    cooldown_hours - hours_since, hours_since, cooldown_hours,
+                )
+                return
+
+            # Reset: unhalt, reset peak to current equity, clear drawdown
+            with self._portfolio._lock:
+                self._portfolio.halted = False
+                self._portfolio.peak_equity = self._portfolio.equity
+                self._portfolio.drawdown_from_peak_pct = 0.0
+            self._portfolio.persist()
+
+            log.warning(
+                "AUTO-RECOVERY: System unhalted after %d-hour cooldown. "
+                "Peak equity reset to $%.2f",
+                cooldown_hours, self._portfolio.equity,
+            )
+
+            event_bus.emit("circuit_breaker", "auto_recovery", {
+                "cooldown_hours": cooldown_hours,
+                "equity": self._portfolio.equity,
+            })
+
+            try:
+                self._telegram.send_alert(
+                    f"AUTO-RECOVERY: System unhalted after {cooldown_hours}h cooldown.\n"
+                    f"Peak equity reset to ${self._portfolio.equity:.2f}\n"
+                    f"Trading will resume on next scan."
+                )
+            except Exception:
+                pass
+
+        except Exception as e:
+            log.error("Auto-recovery check failed: %s", e)
 
     def run_scheduled_analysis(self, session: str) -> list[dict[str, Any]]:
         """Run scheduled analysis for all assets and process results."""
