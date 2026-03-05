@@ -35,22 +35,22 @@ Emergency: CircuitBreaker → halt trading
 ```
 trading-system/
 ├── agents/          # 6 agent modules
-├── core/            # 15 core modules (schemas, llm_client, pipeline, portfolio, risk_manager,
+├── core/            # 18 core modules (schemas, llm_client, pipeline, portfolio, risk_manager,
 │                    #   executor, routing_executor, coinbase_executor, alpaca_executor,
-│                    #   heartbeat, logger, self_optimizer, cost_tracker, event_bus,
-│                    #   ga4_tracker, paper_executor)
+│                    #   paper_executor, heartbeat, logger, self_optimizer, cost_tracker,
+│                    #   event_bus, ga4_tracker, asset_registry, phantom_tracker)
 ├── tools/           # 5 tools (news_fetcher, market_data, technical_indicators, correlation, telegram_bot)
 ├── dashboard/       # FastAPI dashboard server + static files (index.html, agent-floor.html, lotus-creature.js)
 ├── config/          # Dynamic params JSON (updated weekly by SelfOptimizer)
 ├── data/            # Persisted state, trade journal, logs, weekly reviews (gitignored)
-├── tests/           # 23 test files, 305 tests (pytest)
+├── tests/           # 25 test files, 305 tests (pytest)
 ├── docs/            # PRD, Lotus spec
 ├── main.py          # Entry point — 8-task scheduler + dashboard
 └── requirements.txt
 ```
 
 ## Key Files
-- `main.py` — Entry point, scheduler, executor selection (paper/alpaca/ibkr)
+- `main.py` — Entry point, scheduler, executor selection (paper/alpaca/live/ibkr)
 - `core/pipeline.py` — Signal-to-execution orchestration + `check_stop_losses()`
 - `core/alpaca_executor.py` — Alpaca paper/live trading executor
 - `core/coinbase_executor.py` — Coinbase Advanced Trade API crypto executor (BTC, ETH)
