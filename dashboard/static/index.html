@@ -881,7 +881,6 @@ tbody tr.row-no_trade { background: var(--card-alt); }
   overflow: hidden;
   cursor: pointer;
   z-index: 50;
-  transition: all 0.4s ease;
   box-shadow: var(--shadow-md);
   background: var(--background);
 }
@@ -2138,10 +2137,17 @@ function collapseDash() {
   const dash = document.getElementById('dash-mini');
   const floor = document.getElementById('floor-primary');
   const slot = document.getElementById('floor-grid-slot');
+  const shell = dash.querySelector('.shell');
   dash.classList.remove('expanded');
   floor.classList.remove('mini');
   floor.classList.add('fullscreen');
   slot.style.display = 'none';
+  // Force repaint so the scaled-down shell renders correctly
+  if (shell) {
+    shell.style.display = 'none';
+    shell.offsetHeight; // trigger reflow
+    shell.style.display = '';
+  }
 }
 function restoreFloor() {
   collapseDash();
