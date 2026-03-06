@@ -2,7 +2,7 @@
 
 ## Project Overview
 
-Autonomous multi-agent AI trading system for BTC, ETH, GLDM (gold), SLV (silver), AAPL, NVDA, TSLA, AMZN, SPY, META using a 4-tier intelligence stack.
+Autonomous multi-agent AI trading system for BTC, ETH, GLDM (gold), SLV (silver), AAPL, NVDA, TSLA, AMZN, SPY, META, TLT (bonds), XLE (energy) using a 4-tier intelligence stack.
 
 **Owner**: Sukaimi (Code&Canvas)
 **Stack**: Python 3.12 / Direct LLM API calls / Ubuntu 24.04 VPS
@@ -24,8 +24,9 @@ Autonomous multi-agent AI trading system for BTC, ETH, GLDM (gold), SLV (silver)
 ### Decision Flow
 ```
 NewsScout → MarketAnalyst → DevilsAdvocate → RiskManager → Executor → TradeJournal
-Heartbeat (5 min): health check → stop-loss monitor → circuit breaker
-News scan (30 min): full pipeline
+Heartbeat (5 min): health check → stop-loss → take-profit → holding period → circuit breaker
+News scan (15 min): full pipeline
+Chart scan (4x daily): 00:55, 06:55, 12:55, 18:55 UTC
 3 daily sessions: Asian Open (00:00 UTC), European Overlap (08:00), US Close (14:00)
 Weekly: Strategist + SelfOptimizer → rewrite agent params
 Emergency: CircuitBreaker → halt trading → auto-recovery after 6h cooldown
@@ -43,32 +44,33 @@ trading-system/
 ├── dashboard/       # FastAPI dashboard server + static files (index.html, agent-floor.html, lotus-creature.js)
 ├── config/          # Dynamic params JSON (updated weekly by SelfOptimizer)
 ├── data/            # Persisted state, trade journal, logs, weekly reviews (gitignored)
-├── tests/           # 26 test files, 308 tests (pytest)
+├── tests/           # 26 test files, 302 tests (pytest)
 ├── docs/            # PRD, Lotus spec
-├── main.py          # Entry point — 8-task scheduler + dashboard
+├── main.py          # Entry point — 13-task scheduler + dashboard
 └── requirements.txt
 ```
 
 ## Key Files
 - `main.py` — Entry point, scheduler, executor selection (paper/alpaca/live/ibkr)
-- `core/pipeline.py` — Signal-to-execution orchestration + `check_stop_losses()`
+- `core/pipeline.py` — Signal-to-execution orchestration + `check_stop_losses()` + `check_holding_periods()`
 - `core/alpaca_executor.py` — Alpaca paper/live trading executor
 - `core/coinbase_executor.py` — Coinbase Advanced Trade API crypto executor (BTC, ETH)
 - `core/routing_executor.py` — Smart routing: crypto→Coinbase, stocks/ETFs→Alpaca (EXECUTOR_MODE=live)
 - `core/cost_tracker.py` — LLM cost tracking with JSON persistence + daily budget limits (`check_budget()`)
 - `core/event_bus.py` — Real-time pub/sub for dashboard WebSocket + sync listeners
 - `core/ga4_tracker.py` — GA4 Measurement Protocol server-side event tracking
-- `core/portfolio.py` — Thread-safe portfolio state with JSON persistence
+- `core/portfolio.py` — Thread-safe portfolio state with JSON persistence + MAE/MFE tracking + position weight drift monitoring
 - `dashboard/server.py` — FastAPI server (REST + WebSocket)
 - `dashboard/static/index.html` — Dashboard UI + Agent Trading Floor (two-view toggle, Lotus disabled)
 - `dashboard/static/agent-floor.html` — Isometric Agent Trading Floor with live data (served at `/agents`)
 - `dashboard/static/lotus-creature.js` — Animated canvas creature engine (6 stages, currently disabled)
-- `config/risk_params.json` — Risk limits (max position 7%, daily loss 5%, drawdown 15%)
+- `core/risk_manager.py` — Position limits, daily loss caps, drawdown, sector concentration (max 3 per sector)
+- `config/risk_params.json` — Risk limits (max position 7%, daily loss 5%, drawdown 15%, stop-loss 3%, take-profit 5%)
 
 ## Development Commands
 ```bash
 source venv/bin/activate
-pytest tests/ -v                        # Run all 308 tests
+pytest tests/ -v                        # Run all 302 tests
 pytest tests/test_stop_loss_monitor.py -v  # Run specific test file
 python main.py                          # Start full system (scheduler + dashboard on :8080)
 ```
@@ -138,14 +140,15 @@ Optional: DASHBOARD_PORT (default 8080), DASHBOARD_ALLOWED_ORIGINS, GA4_MEASUREM
 - [x] **Phase 4: Paper Trading** — Alpaca executor, stop-loss monitor, dashboard, Lotus creature, VPS deployment
 - [x] **Agent Trading Floor** — Isometric visualization with 9 agents + 4 NPC interns, live data from APIs + WebSocket
 
-### Current Phase: Paper Trading
+### Current Phase: Paper Trading + Acceleration
 - Running on VPS with Alpaca paper account
 - Monitoring trades, agent decisions, costs
 - Homepage: Agent Trading Floor (isometric, live market data, real-time agent animations)
+- Acceleration features: 15-min news scan, 4x chart scan, 72h forced exit, MAE/MFE tracking, sector concentration, take-profit floor (5%), position weight drift monitoring
 
 ### Pending
 - [ ] **Phase 5: Optimization** — Analyze paper trading data, tune parameters (needs 10-20+ trades)
-- [ ] **Phase 6: Micro Live** — $100 SGD on Alpaca live
+- [ ] **Phase 6: Micro Live** — $100 Alpaca (stocks/ETFs) + $100 Coinbase (BTC/ETH), EXECUTOR_MODE=live with RoutingExecutor
 - [ ] **Phase 7: Scale** — Increase capital if profitable
 - [x] Set up GitHub webhook for auto-deploy (payload URL: http://187.77.132.195:9000, secret: trading-system-deploy)
 - [x] HTTPS via nginx + Let's Encrypt on tradebot.codeandcraft.ai

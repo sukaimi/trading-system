@@ -278,22 +278,6 @@ class DevilsAdvocate:
             flags += 1
         return flags
 
-    def _determine_verdict(self, flags: int, fatal_flaws: list[str]) -> Verdict:
-        """Map flag count to verdict."""
-        if fatal_flaws:
-            return Verdict.KILLED
-
-        kill_threshold = self._params.get("kill_thresholds", {}).get(
-            "min_challenges_for_kill", 4
-        )
-
-        if flags >= kill_threshold:
-            return Verdict.KILLED
-        elif flags >= 2:
-            return Verdict.APPROVED_WITH_MODIFICATION
-        else:
-            return Verdict.APPROVED
-
     def _load_params(self) -> dict[str, Any]:
         try:
             with open(PARAMS_FILE) as f:
