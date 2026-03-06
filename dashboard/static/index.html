@@ -1181,7 +1181,7 @@ body, .card, .status-bar, .halted-banner {
     <!-- Trading Floor Mini (grid card — lazy-loaded iframe) -->
     <div class="floor-grid-slot" id="floor-grid-slot">
       <iframe id="floor-grid-frame" class="floor-grid-iframe"></iframe>
-      <div class="floor-grid-overlay" onclick="restoreFloor()">
+      <div class="floor-grid-overlay" onclick="event.stopPropagation(); restoreFloor()">
         <span class="floor-mini-label">Trading Floor</span>
       </div>
     </div>
