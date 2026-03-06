@@ -1130,8 +1130,8 @@ function drawCharacter(gx, gy, colors, accessory, legPhase, bobY, seated) {
     ctx.moveTo(x - 1 * s, headTop + 8 * s);
     ctx.lineTo(x + 1 * s, headTop + 8 * s);
     ctx.stroke();
-  } else if (accessory === 'siren' && !seated) {
-    // Active siren — only when walking/interacting
+  } else if (accessory === 'siren' && (!seated || liveData.portfolio?.halted)) {
+    // Active siren — when walking/interacting OR system is halted
     const pr = (5 + Math.sin(animTime * 3) * 1.5) * s;
     const ga = 0.15 + Math.sin(animTime * 3) * 0.08;
     ctx.fillStyle = `rgba(255,50,50,${ga})`;
@@ -1146,8 +1146,8 @@ function drawCharacter(gx, gy, colors, accessory, legPhase, bobY, seated) {
     ctx.beginPath();
     ctx.arc(x - 1 * s, headTop - 9 * s, 2 * s, 0, Math.PI * 2);
     ctx.fill();
-  } else if (accessory === 'siren' && seated) {
-    // Sleeping Zs — idle Circuit Breaker
+  } else if (accessory === 'siren' && seated && !liveData.portfolio?.halted) {
+    // Sleeping Zs — idle Circuit Breaker (only when system is NOT halted)
     const zFont = Math.max(6, Math.round(8.8 * s));
     ctx.font = `bold ${zFont}px "SF Mono", "Courier New", monospace`;
     ctx.fillStyle = 'rgba(140,180,255,0.7)';
@@ -1981,6 +1981,11 @@ function draw() {
         drawGy = agent.homeGy + progress * 0.5;
         depthBias = 0.1;
       }
+    }
+    // Circuit: stand up when system is halted (active siren)
+    if (agent.name === 'Circuit' && liveData.portfolio?.halted) {
+      isSeated = false;
+      bob = Math.sin(animTime * 2) * 1.5; // tense pacing bob
     }
     // Trader2: shake
     if (agent.name === 'Trader2') drawGx += Math.sin(animTime * 20) * 0.05;

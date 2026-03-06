@@ -286,3 +286,18 @@ class AlpacaExecutor:
         except Exception as e:
             log.warning("Failed to get Alpaca price for %s: %s", symbol, e)
         return 0.0
+
+    def get_account_info(self) -> dict[str, Any] | None:
+        """Fetch account details from Alpaca (equity, cash, positions)."""
+        try:
+            resp = requests.get(
+                f"{self._base_url}/account",
+                headers=self._headers,
+                timeout=10,
+            )
+            if resp.status_code == 200:
+                return resp.json()
+            log.warning("Alpaca account fetch returned %d", resp.status_code)
+        except Exception as e:
+            log.error("Alpaca account fetch failed: %s", e)
+        return None

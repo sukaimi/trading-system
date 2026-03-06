@@ -8,8 +8,10 @@ See TRADING_AGENT_PRD.md Section 4 for the communication map.
 
 from __future__ import annotations
 
+import json
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any
 
 from agents.chart_analyst import ChartAnalyst
@@ -70,6 +72,15 @@ class TradingPipeline:
             telegram=self._telegram,
         )
         self._phantom = PhantomTracker()
+
+        # Load risk params for auto-recovery cooldown + default stop-loss
+        self._risk_params: dict[str, Any] = {}
+        try:
+            params_path = Path(__file__).resolve().parent.parent / "config" / "risk_params.json"
+            if params_path.exists():
+                self._risk_params = json.loads(params_path.read_text())
+        except Exception as e:
+            log.warning("Could not load risk_params.json: %s", e)
 
     def run_news_scan(self) -> list[SignalAlert]:
         """Run a news scan and process any signals found."""
@@ -608,10 +619,36 @@ class TradingPipeline:
 
         return closed
 
+    def sync_portfolio_with_broker(self) -> None:
+        """Log broker account status for monitoring (does NOT override internal equity).
+
+        Internal equity tracks from $100 allocated capital + trade P&L.
+        Broker balance is logged for health monitoring only.
+        """
+        from core.alpaca_executor import AlpacaExecutor
+        if not isinstance(self._executor, AlpacaExecutor):
+            return
+        try:
+            account = self._executor.get_account_info()
+            if not account:
+                return
+            broker_equity = float(account.get("portfolio_value", 0))
+            broker_cash = float(account.get("cash", 0))
+            log.info(
+                "Broker health: equity=$%.2f, cash=$%.2f | Internal: equity=$%.2f",
+                broker_equity, broker_cash, self._portfolio.equity,
+            )
+        except Exception as e:
+            log.error("Broker health check failed: %s", e)
+
     def recalculate_equity(self) -> None:
         """Recalculate portfolio equity using live market prices."""
         if self._portfolio.halted:
             return
+        try:
+            self.sync_portfolio_with_broker()
+        except Exception:
+            pass
         try:
             mdf = MarketDataFetcher()
             self._portfolio.calculate_equity(mdf)

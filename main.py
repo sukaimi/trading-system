@@ -103,6 +103,9 @@ def main():
     )
     log.info("Trading pipeline initialized")
 
+    # Log broker account status on startup (does not override internal equity)
+    pipeline.sync_portfolio_with_broker()
+
     # 7. Initialize heartbeat (skip IBKR check in paper mode)
     heartbeat = Heartbeat(telegram_notifier=telegram, skip_ibkr=(executor_mode != "ibkr"))
     log.info("Heartbeat monitor initialized")
