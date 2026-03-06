@@ -94,44 +94,41 @@ class PortfolioState:
         if not positions:
             return current_equity
 
-        # Cost basis of open positions (what we paid to enter)
-        cost_basis = 0.0
-        for pos in positions:
-            entry_price = pos.get("entry_price", 0.0)
-            quantity = pos.get("quantity", 0.0)
-            cost_basis += entry_price * quantity
+        # Snapshot old unrealized P&L BEFORE updating positions
+        old_unrealized = sum(
+            p.get("unrealized_pnl", 0.0) for p in positions
+        )
 
-        # Cash not tied up in positions
-        cash = current_equity - cost_basis
-
-        # Current market value of positions — also annotate each position
-        market_value = 0.0
+        # Calculate new unrealized P&L across all positions
+        total_unrealized_pnl = 0.0
         for pos in positions:
             asset = pos.get("asset", "")
             quantity = pos.get("quantity", 0.0)
             entry_price = pos.get("entry_price", 0.0)
+            direction = pos.get("direction", "long")
             if not asset or quantity == 0:
                 continue
             price_data = market_data_fetcher.get_price(asset)
             price = price_data.get("price", 0.0)
-            if price > 0:
-                market_value += price * quantity
-                pnl = (price - entry_price) * quantity
-                pnl_pct = ((price - entry_price) / entry_price * 100) if entry_price else 0
-                pos["current_price"] = price
-                pos["unrealized_pnl"] = round(pnl, 4)
-                pos["unrealized_pnl_pct"] = round(pnl_pct, 2)
+            if price <= 0:
+                price = entry_price  # fallback
+            # Longs profit when price goes up, shorts profit when price goes down
+            if direction == "short":
+                pnl = (entry_price - price) * quantity
             else:
-                # Fallback: use entry price if current price unavailable
-                market_value += entry_price * quantity
-                pos["current_price"] = entry_price
-                pos["unrealized_pnl"] = 0.0
-                pos["unrealized_pnl_pct"] = 0.0
+                pnl = (price - entry_price) * quantity
+            pnl_pct = ((pnl) / (entry_price * quantity) * 100) if entry_price and quantity else 0
+            pos["current_price"] = price
+            pos["unrealized_pnl"] = round(pnl, 4)
+            pos["unrealized_pnl_pct"] = round(pnl_pct, 2)
+            total_unrealized_pnl += pnl
 
-        new_equity = cash + market_value
+        # Base equity = current equity minus old unrealized (gives capital + realized gains)
+        base_equity = current_equity - old_unrealized
+        new_equity = base_equity + total_unrealized_pnl
         log.info(
-            "Equity recalculated: $%.2f (cash=$%.2f, positions=$%.4f, cost_basis=$%.4f)",
-            new_equity, cash, market_value, cost_basis,
+            "Equity recalculated: $%.2f (base=$%.2f, unrealized=$%.2f)",
+            new_equity, base_equity, total_unrealized_pnl,
         )
 
         self.update_equity(new_equity)
