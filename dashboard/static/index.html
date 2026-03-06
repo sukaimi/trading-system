@@ -599,13 +599,14 @@ tbody tr:last-child td { border-bottom: none; }
   display: flex;
   flex-direction: column;
   gap: 16px;
+  align-self: stretch;
 }
 
 .activity-card {
   flex: 1;
-  max-height: 380px;
   display: flex;
   flex-direction: column;
+  overflow: hidden;
 }
 .activity-card .card-label {
   display: flex;
@@ -857,6 +858,15 @@ tbody tr.row-no_trade { background: var(--card-alt); }
   border: none !important;
   pointer-events: none;
 }
+.floor-grid-overlay {
+  position: absolute;
+  inset: 0;
+  cursor: pointer;
+  z-index: 2;
+}
+.floor-grid-overlay:hover {
+  background: oklch(1 0 0 / 5%);
+}
 .floor-mini-label {
   position: absolute;
   bottom: 6px;
@@ -869,8 +879,6 @@ tbody tr.row-no_trade { background: var(--card-alt); }
   background: oklch(0 0 0 / 60%);
   padding: 2px 6px;
   border-radius: var(--radius-sm);
-  z-index: 2;
-  pointer-events: none;
 }
 
 /* ── Dashboard Mini (Secondary — thumbnail) ─────────────────── */
@@ -1171,9 +1179,11 @@ body, .card, .status-bar, .halted-banner {
     </div>
 
     <!-- Trading Floor Mini (grid card — lazy-loaded iframe) -->
-    <div class="floor-grid-slot" id="floor-grid-slot" onclick="restoreFloor()">
-      <span class="floor-mini-label">Trading Floor</span>
+    <div class="floor-grid-slot" id="floor-grid-slot">
       <iframe id="floor-grid-frame" class="floor-grid-iframe"></iframe>
+      <div class="floor-grid-overlay" onclick="restoreFloor()">
+        <span class="floor-mini-label">Trading Floor</span>
+      </div>
     </div>
 
     <!-- Trade Journal -->
