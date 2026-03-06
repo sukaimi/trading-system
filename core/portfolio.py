@@ -27,7 +27,7 @@ class PortfolioState:
 
     def __init__(
         self,
-        initial_capital: float = 100.0,
+        initial_capital: float = 100_000.0,
         state_file: str = STATE_FILE,
     ):
         self._lock = threading.Lock()
