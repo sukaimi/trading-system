@@ -523,6 +523,12 @@ h1, h2, h3 { font-family: 'Source Serif 4', Georgia, serif; font-weight: 600; }
   grid-column: 1 / 3;
   grid-row: 4;
 }
+.positions-scroll {
+  max-height: 410px;
+  overflow-y: auto;
+  scrollbar-width: thin;
+  scrollbar-color: var(--scrollbar-thumb) transparent;
+}
 .positions-summary {
   display: flex;
   gap: 24px;
@@ -602,7 +608,7 @@ tbody tr:last-child td { border-bottom: none; }
 }
 
 .activity-card {
-  flex: 1;
+  flex: 0 1 auto;
   display: flex;
   flex-direction: column;
 }
@@ -613,6 +619,7 @@ tbody tr:last-child td { border-bottom: none; }
 .activity-scroll {
   flex: 1;
   min-height: 0;
+  max-height: 410px;
   overflow-y: auto;
   scrollbar-width: thin;
   scrollbar-color: var(--scrollbar-thumb) transparent;
@@ -1119,7 +1126,9 @@ body, .card, .status-bar, .halted-banner {
     <div class="card positions-card" id="card-positions">
       <div class="card-label"><span class="indicator" style="background:var(--chart-1)"></span> Open Positions</div>
       <div class="positions-summary" id="pos-summary"></div>
-      <div id="positions-table"><div class="empty">No open positions</div></div>
+      <div class="positions-scroll">
+        <div id="positions-table"><div class="empty">No open positions</div></div>
+      </div>
     </div>
 
     <!-- Activity Feed + Cost Tracker -->

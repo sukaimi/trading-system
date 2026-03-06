@@ -1246,34 +1246,34 @@ function drawGlassPartition(fromGx, fromGy, toGx, toGy) {
 //
 const agents = [
   // Executives
-  { name: 'Strategist', gx: 4,  gy: 1.5, visitorGx: 4, visitorGy: 3.5, accessory: 'clipboard',
+  { name: 'Strategist', gx: 4,  gy: 1.0, visitorGx: 4, visitorGy: 3.5, accessory: 'clipboard',
     colors: { body: '#e0e0e0', skin: '#e8c49a', legs: '#3a3a3a', hair: '#888888', hat: '#555555' } },
-  { name: 'Circuit',    gx: 11, gy: 1.5, visitorGx: 11, visitorGy: 3.5, accessory: 'siren',
+  { name: 'Circuit',    gx: 11, gy: 1.0, visitorGx: 11, visitorGy: 3.5, accessory: 'siren',
     colors: { body: '#ff6b6b', skin: '#f0c8a0', legs: '#4a2a2a', hair: '#1a0a0a', hat: null } },
   // Analysts (spread out)
-  { name: 'NewsScout',  gx: 3,  gy: 6.5, accessory: 'newspaper',
+  { name: 'NewsScout',  gx: 3,  gy: 6.0, accessory: 'newspaper',
     colors: { body: '#3fb950', skin: '#f0c8a0', legs: '#2a4a3a', hair: '#4a3520', hat: null } },
-  { name: 'Analyst',    gx: 6,  gy: 6.5, accessory: 'glasses',
+  { name: 'Analyst',    gx: 6,  gy: 6.0, accessory: 'glasses',
     colors: { body: '#58a6ff', skin: '#e8c49a', legs: '#2a3a5a', hair: '#2a1a0a', hat: null } },
-  { name: 'Chart',      gx: 9,  gy: 6.5, accessory: 'chart',
+  { name: 'Chart',      gx: 9,  gy: 6.0, accessory: 'chart',
     colors: { body: '#bc8cff', skin: '#f0c8a0', legs: '#3a2a5a', hair: '#1a1a2e', hat: null } },
-  { name: 'Devil',      gx: 12, gy: 6.5, accessory: 'horns',
+  { name: 'Devil',      gx: 12, gy: 6.0, accessory: 'horns',
     colors: { body: '#f85149', skin: '#d4a88c', legs: '#5a2a2a', hair: '#1a0a0a', hat: null } },
   // Ops
-  { name: 'Risk',       gx: 2,  gy: 9.5, accessory: 'shield',
+  { name: 'Risk',       gx: 2,  gy: 9.0, accessory: 'shield',
     colors: { body: '#d29922', skin: '#f0c8a0', legs: '#5a4a1a', hair: '#3a2a10', hat: null } },
-  { name: 'Executor',   gx: 5,  gy: 9.5, accessory: 'bolt',
+  { name: 'Executor',   gx: 5,  gy: 9.0, accessory: 'bolt',
     colors: { body: '#f0883e', skin: '#e8c49a', legs: '#5a3a1a', hair: '#2a1a0a', hat: null } },
-  { name: 'Journal',    gx: 8, gy: 9.5, accessory: 'book',
+  { name: 'Journal',    gx: 8, gy: 9.0, accessory: 'book',
     colors: { body: '#39d2c0', skin: '#f0c8a0', legs: '#1a4a4a', hair: '#4a3520', hat: null } },
   // NPC background workers (bullpen second row, gy=8)
-  { name: 'Trader1', gx: 2,  gy: 12.5, npc: true, accessory: null,
+  { name: 'Trader1', gx: 2,  gy: 12.0, npc: true, accessory: null,
     colors: { body: '#6b9e78', skin: '#e8c49a', legs: '#3a4a3a', hair: '#2a1a0a', hat: null } },
-  { name: 'Trader2', gx: 5,  gy: 12.5, npc: true, accessory: null,
+  { name: 'Trader2', gx: 5,  gy: 12.0, npc: true, accessory: null,
     colors: { body: '#7a8fc2', skin: '#f0c8a0', legs: '#2a3a5a', hair: '#4a3520', hat: null } },
-  { name: 'Trader3', gx: 8,  gy: 12.5, npc: true, accessory: null,
+  { name: 'Trader3', gx: 8,  gy: 12.0, npc: true, accessory: null,
     colors: { body: '#c29a6b', skin: '#d4a88c', legs: '#5a4a3a', hair: '#1a1a2e', hat: null } },
-  { name: 'Trader4', gx: 11, gy: 9.5, npc: true, accessory: null,
+  { name: 'Trader4', gx: 11, gy: 9.0, npc: true, accessory: null,
     colors: { body: '#9b7abf', skin: '#f0c8a0', legs: '#3a2a5a', hair: '#1a0a0a', hat: null } },
 ];
 
@@ -1814,19 +1814,19 @@ function draw() {
   // All desks + monitors drawn after agents (post-agent pass)
 
   // Chairs
-  drawExecChair(4, 1.5);  // Strategist
-  drawExecChair(11, 1.5); // Circuit
-  drawChair(3, 6.5);   // NewsScout
-  drawChair(6, 6.5);   // Analyst
-  drawChair(9, 6.5);   // Chart
-  drawChair(12, 6.5);  // Devil
-  drawChair(2, 12.5);  // Trader1
-  drawChair(5, 12.5);  // Trader2
-  drawChair(8, 12.5);  // Trader3
-  drawChair(11, 9.5);  // Trader4
-  drawChair(2, 9.5);   // Risk
-  drawChair(5, 9.5);   // Executor
-  drawChair(8, 9.5);   // Journal
+  drawExecChair(4, 1.0);  // Strategist
+  drawExecChair(11, 1.0); // Circuit
+  drawChair(3, 6.0);   // NewsScout
+  drawChair(6, 6.0);   // Analyst
+  drawChair(9, 6.0);   // Chart
+  drawChair(12, 6.0);  // Devil
+  drawChair(2, 12.0);  // Trader1
+  drawChair(5, 12.0);  // Trader2
+  drawChair(8, 12.0);  // Trader3
+  drawChair(11, 9.0);  // Trader4
+  drawChair(2, 9.0);   // Risk
+  drawChair(5, 9.0);   // Executor
+  drawChair(8, 9.0);   // Journal
 
   // ── Pantry (4 joined tables along bottom wall at gy=14) ──
   drawCube(11, 14, 1, deskH, 1, '#6a5a48');
@@ -1975,14 +1975,14 @@ function draw() {
     if (agent.name === 'Trader4') {
       if (agent.npcState === 'dancing') {
         isSeated = false;
-        drawGy = agent.homeGy + 0.5;
+        drawGy = agent.homeGy + 1.0;
         legP = agent.dancePhase;
         bob = Math.sin(agent.dancePhase * 2) * 2;
         depthBias = 0.1;
       } else if (agent.npcState === 'climbing' || agent.npcState === 'descending') {
         isSeated = false;
         const progress = agent.npcState === 'climbing' ? 1 - (agent.npcTimer / 0.6) : agent.npcTimer / 0.6;
-        drawGy = agent.homeGy + progress * 0.5;
+        drawGy = agent.homeGy + progress * 1.0;
         depthBias = 0.1;
       }
     }
