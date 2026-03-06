@@ -56,14 +56,6 @@ async def index() -> HTMLResponse:
     return HTMLResponse(content=content)
 
 
-@app.get("/preview", response_class=HTMLResponse)
-async def preview() -> HTMLResponse:
-    html_path = os.path.join(DASHBOARD_DIR, "static", "preview.html")
-    with open(html_path) as f:
-        content = f.read()
-    return HTMLResponse(content=content)
-
-
 @app.get("/agents", response_class=HTMLResponse)
 async def agent_floor() -> HTMLResponse:
     html_path = os.path.join(DASHBOARD_DIR, "static", "agent-floor.html")
