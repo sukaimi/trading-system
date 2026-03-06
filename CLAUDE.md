@@ -2,7 +2,7 @@
 
 ## Project Overview
 
-Autonomous multi-agent AI trading system for BTC, ETH, GLDM (gold), SLV (silver), AAPL, NVDA, TSLA, AMZN, SPY, META, TLT (bonds), XLE (energy) using a 4-tier intelligence stack.
+Autonomous multi-agent AI trading system for 14 assets — BTC, ETH, GLDM (gold), SLV (silver), AAPL, NVDA, TSLA, AMZN, SPY, META, TLT (bonds), XLE (energy), EWS (Singapore), FXI (China) — using a 4-tier intelligence stack.
 
 **Owner**: Sukaimi (Code&Canvas)
 **Stack**: Python 3.12 / Direct LLM API calls / Ubuntu 24.04 VPS
@@ -46,7 +46,7 @@ trading-system/
 ├── data/            # Persisted state, trade journal, logs, weekly reviews (gitignored)
 ├── tests/           # 26 test files, 302 tests (pytest)
 ├── docs/            # PRD, Lotus spec
-├── main.py          # Entry point — 13-task scheduler + dashboard
+├── main.py          # Entry point — 12-task scheduler + dashboard
 └── requirements.txt
 ```
 
