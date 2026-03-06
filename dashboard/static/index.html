@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Trading System — Dashboard Preview</title>
+<title>Trading System — Dashboard</title>
 <!-- Google tag (gtag.js) -->
 <script async src="https://www.googletagmanager.com/gtag/js?id={{GA4_MEASUREMENT_ID}}"></script>
 <script>
@@ -865,7 +865,8 @@ tbody tr.row-no_trade { background: var(--card-alt); }
   z-index: 2;
 }
 .floor-grid-overlay:hover {
-  background: oklch(1 0 0 / 5%);
+  background: var(--foreground);
+  opacity: 0.06;
 }
 .floor-mini-label {
   position: absolute;
@@ -875,8 +876,8 @@ tbody tr.row-no_trade { background: var(--card-alt); }
   font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 0.06em;
-  color: oklch(0.7 0 0);
-  background: oklch(0 0 0 / 60%);
+  color: var(--muted-foreground);
+  background: var(--overlay-bg);
   padding: 2px 6px;
   border-radius: var(--radius-sm);
 }
@@ -1276,7 +1277,7 @@ const state = {
   market: null,
   prevMarket: null,
   priceHistory: null,
-  equityHistory: null,
+  equityHistory: [],
   events: [],
   scheduler: null,
   costs: { total_usd: 0, by_provider: {}, by_agent: {}, call_count: 0 },
@@ -1298,8 +1299,7 @@ const PIPELINE_STAGES = ['news', 'techscan', 'analyst', 'chart', 'devil', 'risk'
 function updateClock() {
   const now = new Date();
   document.getElementById('clock').textContent =
-    now.toLocaleTimeString('en-US', { hour12: false }) + ' UTC' +
-    (now.getTimezoneOffset() > 0 ? '-' : '+') + Math.abs(now.getTimezoneOffset() / 60);
+    now.toLocaleTimeString('en-US', { hour12: false, timeZone: 'UTC' }) + ' UTC';
 }
 setInterval(updateClock, 1000);
 updateClock();
@@ -2111,8 +2111,11 @@ function handleEvent(event) {
       fetch('/api/scheduler').then(r => r.ok ? r.json() : []).then(d => { state.scheduler = d; renderScheduler(); });
       break;
     case 'circuit_breaker':
-      if (event.event_type === 'triggered' || event.event_type === 'decision') {
+      if (event.event_type === 'triggered') {
         document.getElementById('halted-banner').classList.add('show');
+      }
+      if (event.event_type === 'auto_recovery') {
+        document.getElementById('halted-banner').classList.remove('show');
       }
       glowPanel('card-agents', 'orange');
       break;
