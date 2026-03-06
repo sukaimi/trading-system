@@ -606,7 +606,6 @@ tbody tr:last-child td { border-bottom: none; }
   flex: 1;
   display: flex;
   flex-direction: column;
-  overflow: hidden;
 }
 .activity-card .card-label {
   display: flex;
@@ -614,6 +613,7 @@ tbody tr:last-child td { border-bottom: none; }
 }
 .activity-scroll {
   flex: 1;
+  min-height: 0;
   overflow-y: auto;
   scrollbar-width: thin;
   scrollbar-color: var(--scrollbar-thumb) transparent;
@@ -653,19 +653,6 @@ tbody tr:last-child td { border-bottom: none; }
 .badge-cost        { background: oklch(0.769 0.188 70.08 / 15%); color: var(--chart-5); }
 
 .activity-item .detail { color: var(--foreground); font-size: 12px; }
-.collapse-btn {
-  margin-left: auto;
-  background: none;
-  border: 1px solid var(--border);
-  color: var(--muted-foreground);
-  font-size: 10px;
-  padding: 2px 8px;
-  border-radius: var(--radius-sm);
-  cursor: pointer;
-  font-family: inherit;
-}
-.collapse-btn:hover { color: var(--foreground); border-color: var(--muted-foreground); }
-.activity-card.collapsed .activity-scroll { display: none; }
 
 /* ── Agent Health ───────────────────────────────────────────── */
 .agents-card {
@@ -1142,7 +1129,6 @@ body, .card, .status-bar, .halted-banner {
       <div class="card activity-card" id="card-activity">
         <div class="card-label">
           <span class="indicator" style="background:var(--warning)"></span> Activity
-          <button class="collapse-btn" id="activity-toggle" onclick="toggleActivity()">Collapse</button>
         </div>
         <div class="activity-scroll" id="activity-feed">
           <div class="empty">Waiting for events...</div>
@@ -2130,13 +2116,6 @@ function handleEvent(event) {
 }
 
 // ── Activity Collapse Toggle ───────────────────────────────────
-function toggleActivity() {
-  const card = document.querySelector('.activity-card');
-  const btn = document.getElementById('activity-toggle');
-  card.classList.toggle('collapsed');
-  btn.textContent = card.classList.contains('collapsed') ? 'Expand' : 'Collapse';
-}
-
 // ── Dashboard / Floor Toggle ────────────────────────────────────
 function expandDash() {
   const dash = document.getElementById('dash-mini');
