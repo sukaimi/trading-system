@@ -137,6 +137,10 @@ def main():
         # Run circuit breaker check alongside heartbeat
         pipeline.run_circuit_breaker_check()
 
+    def run_chart_scan():
+        log.info("Scheduled chart scan starting...")
+        pipeline.run_chart_scan()
+
     def run_news_scan():
         log.info("Scheduled news scan starting...")
         pipeline.run_news_scan()
@@ -185,13 +189,14 @@ def main():
     # 10. Register all schedules (wrapped for dashboard events)
     schedule.every(5).minutes.do(_emit_task("heartbeat", run_heartbeat))
     schedule.every(30).minutes.do(_emit_task("news_scan", run_news_scan))
+    schedule.every(2).hours.do(_emit_task("chart_scan", run_chart_scan))
     schedule.every().day.at("00:00").do(_emit_task("asian_open", run_asian_open))           # 08:00 SGT
     schedule.every().day.at("08:00").do(_emit_task("european_overlap", run_european_overlap))  # 16:00 SGT
     schedule.every().day.at("14:00").do(_emit_task("us_close", run_us_close))               # 22:00 SGT
     schedule.every().day.at("15:00").do(_emit_task("daily_summary", run_daily_summary))     # 23:00 SGT
     schedule.every().day.at("16:00").do(_emit_task("daily_reset", run_daily_reset))         # 00:00 SGT (next day)
     schedule.every().sunday.at("15:00").do(_emit_task("weekly_review", run_weekly_review))  # 23:00 SGT Sunday
-    log.info("All schedules registered (8 total)")
+    log.info("All schedules registered (9 total)")
 
     # Register signal handlers for graceful shutdown
     signal.signal(signal.SIGINT, _shutdown)

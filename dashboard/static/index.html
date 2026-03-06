@@ -454,6 +454,14 @@ h1, h2, h3 { font-family: 'Source Serif 4', Georgia, serif; font-weight: 600; }
 .pipe-node.modified { border-color: var(--warning); }
 .pipe-node.modified .icon { color: var(--warning); }
 
+.pipe-entry-group {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  align-items: center;
+}
+.pipe-entry-group .pipe-node { min-width: 80px; }
+
 .pipe-connector {
   width: 32px;
   height: 2px;
@@ -1087,7 +1095,10 @@ body, .card, .status-bar, .halted-banner {
     <div class="card pipeline-card" id="card-pipeline">
       <div class="card-label"><span class="indicator" style="background:var(--chart-4)"></span> Signal Pipeline</div>
       <div class="pipeline-flow" id="pipeline-flow">
-        <div class="pipe-node" id="pipe-news"><div class="icon">N</div><div class="label">News</div></div>
+        <div class="pipe-entry-group">
+          <div class="pipe-node" id="pipe-news"><div class="icon">N</div><div class="label">News</div></div>
+          <div class="pipe-node" id="pipe-techscan"><div class="icon">T</div><div class="label">Chart Scan</div></div>
+        </div>
         <div class="pipe-connector" id="pipe-conn-1"></div>
         <div class="pipe-parallel">
           <div class="pipe-parallel-label">parallel</div>
@@ -1260,7 +1271,7 @@ const state = {
   },
 };
 
-const PIPELINE_STAGES = ['news', 'analyst', 'chart', 'devil', 'risk', 'execute'];
+const PIPELINE_STAGES = ['news', 'techscan', 'analyst', 'chart', 'devil', 'risk', 'execute'];
 
 // ── Clock ──────────────────────────────────────────────────────
 function updateClock() {
@@ -1656,6 +1667,8 @@ function buildActivityItemInner(e) {
 function formatEventDetail(ev) {
   const d = ev.data || {};
   switch (ev.event_type) {
+    case 'chart_scan_start': return 'Chart scan started';
+    case 'chart_scan_complete': return 'Chart scan complete — ' + (d.signal_count || 0) + ' signals';
     case 'news_scan_start': return 'News scan started';
     case 'news_scan_complete': return 'News scan complete — ' + (d.signal_count || 0) + ' signals';
     case 'thesis_generated': return 'Thesis: <b>' + esc(d.direction||'') + '</b> ' + esc(d.asset||'') + ' (conf: ' + fmtNum(d.confidence||0,2) + ')';
@@ -1836,7 +1849,16 @@ function updatePipelineFlow(event) {
 
   if (flow.resetTimer) { clearTimeout(flow.resetTimer); flow.resetTimer = null; }
 
-  if (type === 'news_scan_start') {
+  if (type === 'chart_scan_start') {
+    flow.active = true;
+    flow.stageResults = {};
+    flow.currentAsset = null;
+    flow.currentStage = 'techscan';
+    flow.stageResults.techscan = 'active';
+  } else if (type === 'chart_scan_complete') {
+    flow.stageResults.techscan = 'passed';
+    flow.currentStage = 'analyst';
+  } else if (type === 'news_scan_start') {
     flow.active = true;
     flow.stageResults = {};
     flow.currentAsset = null;

@@ -82,6 +82,38 @@ class TradingPipeline:
         except Exception as e:
             log.warning("Could not load risk_params.json: %s", e)
 
+    def run_chart_scan(self) -> list[SignalAlert]:
+        """Run a technical chart scan and process any signals found.
+
+        Tier 0: pure Python, no LLM calls. Generates SignalAlerts from
+        technical indicator triggers (RSI, MACD, Bollinger, EMA crossovers).
+        """
+        if self._portfolio.halted:
+            log.warning("System halted — skipping chart scan")
+            return []
+
+        try:
+            from tools.chart_scanner import ChartScanner
+
+            log.info("Starting chart scan...")
+            event_bus.emit("pipeline", "chart_scan_start", {})
+            scanner = ChartScanner()
+            signals = scanner.scan_all()
+            log.info("Chart scan produced %d signals", len(signals))
+            event_bus.emit("pipeline", "chart_scan_complete", {
+                "signal_count": len(signals),
+                "signals": [{"headline": s.headline, "asset": s.asset, "strength": s.signal_strength} for s in signals],
+            })
+
+            if signals:
+                self.process_signals(signals)
+
+            return signals
+        except Exception as e:
+            log.error("Chart scan failed: %s", e)
+            self._telegram.send_alert(f"Chart scan error: {e}")
+            return []
+
     def run_news_scan(self) -> list[SignalAlert]:
         """Run a news scan and process any signals found."""
         if self._portfolio.halted:

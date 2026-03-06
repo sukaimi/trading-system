@@ -162,7 +162,7 @@ async def get_recent_events() -> list[dict[str, Any]]:
 @app.get("/api/config")
 async def get_config() -> dict[str, Any]:
     result: dict[str, Any] = {}
-    for name in ("risk_params", "assets", "news_scout_params", "market_analyst_params", "devils_advocate_params", "chart_analyst_params"):
+    for name in ("risk_params", "assets", "news_scout_params", "market_analyst_params", "devils_advocate_params", "chart_analyst_params", "chart_scanner_params"):
         path = os.path.join(CONFIG_DIR, f"{name}.json")
         data = _read_json(path, None)
         if data is not None:

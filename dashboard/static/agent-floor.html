@@ -165,7 +165,9 @@ function processLiveEvents() {
         if (walker && walker.pantryTrip && walker.state !== 'idle') {
           recallFromPantry(anim.agent);
         }
-        if (sendAgentTo(anim.agent, target.homeGx, target.homeGy, anim.pause)) {
+        const tgx = target.visitorGx != null ? target.visitorGx : target.homeGx;
+        const tgy = target.visitorGy != null ? target.visitorGy : target.homeGy;
+        if (sendAgentTo(anim.agent, tgx, tgy, anim.pause)) {
           demo.label = anim.label;
           demo.labelAgent = anim.agent;
           setTimeout(() => {
@@ -1244,9 +1246,9 @@ function drawGlassPartition(fromGx, fromGy, toGx, toGy) {
 //
 const agents = [
   // Executives
-  { name: 'Strategist', gx: 4,  gy: 1.5, accessory: 'clipboard',
+  { name: 'Strategist', gx: 4,  gy: 1.5, visitorGx: 4, visitorGy: 3.5, accessory: 'clipboard',
     colors: { body: '#e0e0e0', skin: '#e8c49a', legs: '#3a3a3a', hair: '#888888', hat: '#555555' } },
-  { name: 'Circuit',    gx: 11, gy: 1.5, accessory: 'siren',
+  { name: 'Circuit',    gx: 11, gy: 1.5, visitorGx: 11, visitorGy: 3.5, accessory: 'siren',
     colors: { body: '#ff6b6b', skin: '#f0c8a0', legs: '#4a2a2a', hair: '#1a0a0a', hat: null } },
   // Analysts (spread out)
   { name: 'NewsScout',  gx: 3,  gy: 6.5, accessory: 'newspaper',
@@ -1547,7 +1549,9 @@ function updateDemo(dt) {
         return; // wait for them to rush back
       }
       const target = agents.find(a => a.name === step.target);
-      if (target && sendAgentTo(step.agent, target.homeGx, target.homeGy, step.pause)) {
+      const dtgx = target && target.visitorGx != null ? target.visitorGx : (target ? target.homeGx : 0);
+      const dtgy = target && target.visitorGy != null ? target.visitorGy : (target ? target.homeGy : 0);
+      if (target && sendAgentTo(step.agent, dtgx, dtgy, step.pause)) {
         demo.phase = 'active';
         demo.label = step.label || '';
         demo.labelAgent = step.agent;
