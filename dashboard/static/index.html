@@ -1868,7 +1868,7 @@ function updatePipelineFlow(event) {
     flow.stageResults.news = 'passed';
     flow.currentStage = 'analyst';
   } else if (type === 'thesis_generated') {
-    flow.stageResults.news = 'passed';
+    if (!flow.stageResults.techscan) flow.stageResults.news = 'passed';
     flow.stageResults.analyst = 'passed';
     flow.currentStage = 'chart';
     flow.currentAsset = d.asset;
@@ -1952,10 +1952,10 @@ function renderPipelineFlow() {
   const conn1 = document.getElementById('pipe-conn-1');
   if (conn1) {
     conn1.classList.remove('passed', 'killed', 'flowing');
-    const newsResult = flow.stageResults.news;
-    if (newsResult === 'passed') conn1.classList.add('passed');
-    if (newsResult === 'killed') conn1.classList.add('killed');
-    if (flow.active && parallelStages.includes(flow.currentStage) && newsResult === 'passed') conn1.classList.add('flowing');
+    const entryResult = flow.stageResults.news || flow.stageResults.techscan;
+    if (entryResult === 'passed') conn1.classList.add('passed');
+    if (entryResult === 'killed') conn1.classList.add('killed');
+    if (flow.active && parallelStages.includes(flow.currentStage) && entryResult === 'passed') conn1.classList.add('flowing');
   }
 
   const conn4 = document.getElementById('pipe-conn-4');
