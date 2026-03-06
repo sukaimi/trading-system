@@ -851,10 +851,10 @@ tbody tr.row-no_trade { background: var(--card-alt); }
 .floor-grid-slot:hover {
   border-color: var(--muted-foreground);
 }
-.floor-grid-slot .floor-grid-iframe {
-  width: 100%;
-  height: 100%;
-  border: none;
+.floor-grid-iframe {
+  width: 100% !important;
+  height: 100% !important;
+  border: none !important;
   pointer-events: none;
 }
 .floor-mini-label {
@@ -1170,10 +1170,10 @@ body, .card, .status-bar, .halted-banner {
       <div class="cost-breakdown" id="cost-by-agent"></div>
     </div>
 
-    <!-- Trading Floor Mini (placeholder in grid) -->
+    <!-- Trading Floor Mini (grid card — lazy-loaded iframe) -->
     <div class="floor-grid-slot" id="floor-grid-slot" onclick="restoreFloor()">
       <span class="floor-mini-label">Trading Floor</span>
-      <iframe src="/agents" class="floor-grid-iframe"></iframe>
+      <iframe id="floor-grid-frame" class="floor-grid-iframe"></iframe>
     </div>
 
     <!-- Trade Journal -->
@@ -2129,10 +2129,15 @@ function expandDash() {
   const dash = document.getElementById('dash-mini');
   const floor = document.getElementById('floor-primary');
   const slot = document.getElementById('floor-grid-slot');
+  const gridFrame = document.getElementById('floor-grid-frame');
   if (!dash.classList.contains('expanded')) {
     dash.classList.add('expanded');
     floor.classList.remove('fullscreen');
     floor.classList.add('mini');
+    // Lazy-load the grid iframe on first expand
+    if (!gridFrame.src || !gridFrame.src.includes('/agents')) {
+      gridFrame.src = '/agents';
+    }
     slot.style.display = 'block';
     setTimeout(() => renderEquityCurve(), 100);
   }
