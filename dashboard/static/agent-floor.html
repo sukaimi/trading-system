@@ -1894,28 +1894,36 @@ function draw() {
   const drawList = [];
   const npFs = Math.min(10, Math.max(5, Math.round(7.7 * s)));
 
-  // Nameplate helper (draws on desk surface)
-  function drawNP(name, gx, gy) {
+  // Nameplate helper (draws on desk surface, optional title below name)
+  function drawNP(name, gx, gy, title) {
     ctx.font = `bold ${npFs}px "SF Mono", "Courier New", monospace`;
     ctx.textAlign = 'center';
     const p = isoToScreen(gx, gy);
     const tw = ctx.measureText(name).width;
+    const titleFs = Math.round(npFs * 0.7);
+    const totalH = title ? npFs + titleFs + 3 : npFs + 2;
+    const bgW = title ? Math.max(tw, ctx.measureText(title).width * 0.7) + 8 : tw + 4;
     ctx.fillStyle = 'rgba(30,36,48,0.7)';
-    ctx.fillRect(p.x - tw / 2 - 2, p.y - deskH - npFs + 1, tw + 4, npFs + 2);
+    ctx.fillRect(p.x - bgW / 2, p.y - deskH - totalH + 1, bgW, totalH);
     ctx.fillStyle = '#8a9aaa';
-    ctx.fillText(name, p.x, p.y - deskH);
+    ctx.fillText(name, p.x, p.y - deskH - (title ? titleFs + 2 : 0));
+    if (title) {
+      ctx.font = `${titleFs}px "SF Mono", "Courier New", monospace`;
+      ctx.fillStyle = '#6a7a8a';
+      ctx.fillText(title, p.x, p.y - deskH);
+    }
   }
 
   // -- Desk groups (each with cubes + monitors + nameplate) --
   drawList.push({ depth: 4 + 2, fn() {
     drawCube(3,2,1,deskH,1,'#7a6050'); drawCube(4,2,1,deskH,1,'#7a6050'); drawCube(5,2,1,deskH,1,'#7a6050');
     drawLargeMonitor(3.5,2.5,'#1a3848'); drawLargeMonitor(4.5,2.5,'#1a3848');
-    drawNP('Strategist', 4.5, 2.5);
+    drawNP('Strategist', 4.5, 2.5, 'CIO');
   }});
   drawList.push({ depth: 11 + 2, fn() {
     drawCube(10,2,1,deskH,1,'#7a6050'); drawCube(11,2,1,deskH,1,'#7a6050'); drawCube(12,2,1,deskH,1,'#7a6050');
     drawLargeMonitor(10.5,2.5,'#481a28'); drawLargeMonitor(11.5,2.5,'#481a28');
-    drawNP('Circuit', 11.5, 2.5);
+    drawNP('Circuit', 11.5, 2.5, 'CRO');
   }});
   drawList.push({ depth: 3.5 + 7, fn() {
     drawCube(3,7,1,deskH,1,'#8a7560'); drawCube(4,7,1,deskH,1,'#8a7560');

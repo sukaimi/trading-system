@@ -165,7 +165,7 @@ class DevilsAdvocate:
             )
 
         kill_threshold = self._params.get("kill_thresholds", {}).get(
-            "min_challenges_for_kill", 6
+            "min_challenges_for_kill", 3
         )
 
         if flags >= kill_threshold:

@@ -247,7 +247,7 @@ class TradingPipeline:
                 "reasoning": verdict.final_reasoning[:200],
             })
             try:
-                self._journal.record_killed_trade(thesis, verdict)
+                self._journal.record_killed_trade(thesis, verdict, signal=signal, killed_by="devils_advocate")
             except Exception as e:
                 log.error("Journal record_killed_trade failed: %s", e)
             self._phantom.record_missed(
@@ -290,7 +290,7 @@ class TradingPipeline:
         if not approved:
             log.info("Trade rejected by Risk Manager: %s", reason)
             try:
-                self._journal.record_killed_trade(thesis, verdict)
+                self._journal.record_killed_trade(thesis, verdict, signal=signal, killed_by="risk_manager")
             except Exception as e:
                 log.error("Journal record_killed_trade failed: %s", e)
             self._phantom.record_missed(
@@ -350,6 +350,9 @@ class TradingPipeline:
                 "quantity": confirmation.get("quantity", order_to_execute.get("quantity", 0)),
                 "stop_loss_price": order_to_execute.get("stop_loss"),
                 "take_profit_price": order_to_execute.get("take_profit"),
+                "timestamp_open": datetime.now(timezone.utc).isoformat(),
+                "mae_pct": 0.0,
+                "mfe_pct": 0.0,
             })
             self._portfolio.persist()
         except Exception as e:
@@ -492,6 +495,31 @@ class TradingPipeline:
                 "pnl": round(pnl, 2),
             })
 
+            # Record exit in journal with exit_reason + MAE/MFE
+            try:
+                pnl_pct = ((pnl) / (entry_price * quantity) * 100) if entry_price and quantity else 0
+                ts_open = pos.get("timestamp_open")
+                hold_hours = 0.0
+                if ts_open:
+                    try:
+                        opened_at = datetime.fromisoformat(ts_open.replace("Z", "+00:00"))
+                        if opened_at.tzinfo is None:
+                            opened_at = opened_at.replace(tzinfo=timezone.utc)
+                        hold_hours = (datetime.now(timezone.utc) - opened_at).total_seconds() / 3600
+                    except (ValueError, TypeError):
+                        pass
+                self._journal.record_exit(trade_id, {
+                    "exit_price": exit_price,
+                    "pnl_usd": round(pnl, 2),
+                    "pnl_pct": round(pnl_pct, 2),
+                    "exit_reason": "stop_loss",
+                    "hold_duration_hours": round(hold_hours, 1),
+                    "mae_pct": pos.get("mae_pct", 0.0),
+                    "mfe_pct": pos.get("mfe_pct", 0.0),
+                })
+            except Exception as e:
+                log.error("Stop-loss journal record failed: %s", e)
+
             try:
                 self._telegram.send_alert(
                     f"STOP-LOSS HIT: {direction.upper()} {asset}\n"
@@ -621,6 +649,31 @@ class TradingPipeline:
                 "pnl": round(pnl, 2),
             })
 
+            # Record exit in journal with exit_reason + MAE/MFE
+            try:
+                pnl_pct = ((pnl) / (entry_price * quantity) * 100) if entry_price and quantity else 0
+                ts_open = pos.get("timestamp_open")
+                hold_hours = 0.0
+                if ts_open:
+                    try:
+                        opened_at = datetime.fromisoformat(ts_open.replace("Z", "+00:00"))
+                        if opened_at.tzinfo is None:
+                            opened_at = opened_at.replace(tzinfo=timezone.utc)
+                        hold_hours = (datetime.now(timezone.utc) - opened_at).total_seconds() / 3600
+                    except (ValueError, TypeError):
+                        pass
+                self._journal.record_exit(trade_id, {
+                    "exit_price": exit_price,
+                    "pnl_usd": round(pnl, 2),
+                    "pnl_pct": round(pnl_pct, 2),
+                    "exit_reason": "take_profit",
+                    "hold_duration_hours": round(hold_hours, 1),
+                    "mae_pct": pos.get("mae_pct", 0.0),
+                    "mfe_pct": pos.get("mfe_pct", 0.0),
+                })
+            except Exception as e:
+                log.error("Take-profit journal record failed: %s", e)
+
             try:
                 self._telegram.send_alert(
                     f"TAKE-PROFIT HIT: {direction.upper()} {asset}\n"
@@ -648,6 +701,152 @@ class TradingPipeline:
                 self._portfolio.persist()
             except Exception as e:
                 log.error("Portfolio persist after take-profit closures failed: %s", e)
+
+        return closed
+
+    _MAX_HOLDING_HOURS = 72
+
+    def check_holding_periods(self) -> list[dict[str, Any]]:
+        """Force-close positions held longer than 72 hours.
+
+        Called every 5 minutes from the heartbeat cycle.
+        Tier 0: pure Python, no LLM, deterministic.
+        """
+        if self._portfolio.halted:
+            log.info("System halted — skipping holding period check")
+            return []
+
+        positions = self._portfolio.open_positions[:]
+        closed: list[dict[str, Any]] = []
+        market_data = MarketDataFetcher()
+        now = datetime.now(timezone.utc)
+
+        for pos in positions:
+            ts_open = pos.get("timestamp_open")
+            if not ts_open:
+                continue
+
+            try:
+                opened_at = datetime.fromisoformat(ts_open.replace("Z", "+00:00"))
+                if opened_at.tzinfo is None:
+                    opened_at = opened_at.replace(tzinfo=timezone.utc)
+            except (ValueError, TypeError):
+                continue
+
+            holding_hours = (now - opened_at).total_seconds() / 3600
+            if holding_hours < self._MAX_HOLDING_HOURS:
+                continue
+
+            asset = pos.get("asset", "")
+            trade_id = pos.get("trade_id", "")
+            direction = pos.get("direction", "long")
+
+            log.warning(
+                "TIME EXIT: %s %s (trade %s) — held %.1f hours (max %d)",
+                direction.upper(), asset, trade_id, holding_hours, self._MAX_HOLDING_HOURS,
+            )
+
+            # Fetch current price for P&L calculation
+            try:
+                price_data = market_data.get_price(asset)
+                current_price = price_data.get("price", 0)
+            except Exception as e:
+                log.error("Time exit: price fetch failed for %s: %s", asset, e)
+                continue
+
+            if current_price <= 0:
+                log.warning("Time exit: no valid price for %s, skipping", asset)
+                continue
+
+            quantity = pos.get("quantity", 0)
+            close_direction = "short" if direction == "long" else "long"
+            close_order = {
+                "type": "execution_order",
+                "thesis_id": f"time_close_{trade_id}",
+                "asset": asset,
+                "direction": close_direction,
+                "quantity": quantity,
+                "order_type": "market",
+                "stop_loss": None,
+                "position_size_pct": pos.get("position_size_pct", 0),
+            }
+
+            try:
+                confirmation = self._executor.execute(close_order)
+            except Exception as e:
+                log.error("Time exit close failed for %s: %s", trade_id, e)
+                continue
+
+            if confirmation.get("type") == "order_error":
+                log.error(
+                    "Time exit close order error for %s: %s",
+                    trade_id, confirmation.get("error", ""),
+                )
+                continue
+
+            # Remove position and record P&L
+            self._portfolio.remove_position(trade_id)
+
+            entry_price = pos.get("entry_price", 0)
+            exit_price = confirmation.get("fill_price", current_price)
+            if direction == "long":
+                pnl = (exit_price - entry_price) * quantity
+            else:
+                pnl = (entry_price - exit_price) * quantity
+
+            self._portfolio.record_trade(pnl)
+
+            event_bus.emit("pipeline", "time_exit", {
+                "trade_id": trade_id,
+                "asset": asset,
+                "direction": direction,
+                "holding_hours": round(holding_hours, 1),
+                "entry_price": entry_price,
+                "exit_price": exit_price,
+                "pnl": round(pnl, 2),
+            })
+
+            # Record exit in journal with exit_reason
+            try:
+                pnl_pct = ((pnl) / (entry_price * quantity) * 100) if entry_price and quantity else 0
+                self._journal.record_exit(trade_id, {
+                    "exit_price": exit_price,
+                    "pnl_usd": round(pnl, 2),
+                    "pnl_pct": round(pnl_pct, 2),
+                    "exit_reason": "time_exit",
+                    "hold_duration_hours": round(holding_hours, 1),
+                    "mae_pct": pos.get("mae_pct", 0.0),
+                    "mfe_pct": pos.get("mfe_pct", 0.0),
+                })
+            except Exception as e:
+                log.error("Time exit journal record failed: %s", e)
+
+            try:
+                self._telegram.send_alert(
+                    f"TIME EXIT (72h): {direction.upper()} {asset}\n"
+                    f"Entry: ${entry_price:.2f} | Exit: ${exit_price:.2f}\n"
+                    f"Held: {holding_hours:.1f}h | P&L: ${pnl:.2f}"
+                )
+            except Exception as e:
+                log.error("Time exit Telegram alert failed: %s", e)
+
+            closed.append({
+                "trade_id": trade_id,
+                "asset": asset,
+                "direction": direction,
+                "entry_price": entry_price,
+                "exit_price": exit_price,
+                "holding_hours": round(holding_hours, 1),
+                "pnl": round(pnl, 2),
+            })
+
+            log.info("Time exit close complete: %s %s — P&L: $%.2f (held %.1fh)", asset, trade_id, pnl, holding_hours)
+
+        if closed:
+            try:
+                self._portfolio.persist()
+            except Exception as e:
+                log.error("Portfolio persist after time exit closures failed: %s", e)
 
         return closed
 
@@ -820,7 +1019,7 @@ class TradingPipeline:
 
         if verdict.verdict == Verdict.KILLED:
             try:
-                self._journal.record_killed_trade(thesis, verdict)
+                self._journal.record_killed_trade(thesis, verdict, killed_by="devils_advocate")
             except Exception as e:
                 log.error("Journal failed: %s", e)
             self._phantom.record_missed(
@@ -848,6 +1047,10 @@ class TradingPipeline:
             return result
 
         if not approved:
+            try:
+                self._journal.record_killed_trade(thesis, verdict, killed_by="risk_manager")
+            except Exception as e:
+                log.error("Journal record_killed_trade failed: %s", e)
             self._phantom.record_missed(
                 asset=thesis.asset,
                 direction=thesis.direction.value,
@@ -902,6 +1105,9 @@ class TradingPipeline:
                 "quantity": confirmation.get("quantity", order_to_execute.get("quantity", 0)),
                 "stop_loss_price": order_to_execute.get("stop_loss"),
                 "take_profit_price": order_to_execute.get("take_profit"),
+                "timestamp_open": datetime.now(timezone.utc).isoformat(),
+                "mae_pct": 0.0,
+                "mfe_pct": 0.0,
             })
             self._portfolio.persist()
         except Exception as e:
@@ -1063,6 +1269,20 @@ class TradingPipeline:
             else:
                 take_profit = round(current_price - reward_distance, 2)
             log.info("Take-profit set at $%.2f (%.1f:1 R:R from $%.2f)", take_profit, rr, current_price)
+
+        # Ensure take-profit is at least the default percentage from config
+        tp_pct = self._risk_params.get("default_take_profit_pct", 5.0) / 100.0
+        if current_price > 0 and tp_pct > 0:
+            if thesis.direction.value == "long":
+                min_tp = round(current_price * (1 + tp_pct), 2)
+                if take_profit is None or take_profit < min_tp:
+                    take_profit = min_tp
+                    log.info("Take-profit raised to default minimum $%.2f (%.0f%% from $%.2f)", take_profit, tp_pct * 100, current_price)
+            else:
+                min_tp = round(current_price * (1 - tp_pct), 2)
+                if take_profit is None or take_profit > min_tp:
+                    take_profit = min_tp
+                    log.info("Take-profit raised to default minimum $%.2f (%.0f%% from $%.2f)", take_profit, tp_pct * 100, current_price)
 
         if current_price > 0 and equity > 0:
             position_value = equity * (position_pct / 100.0)

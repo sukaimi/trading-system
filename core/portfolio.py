@@ -18,6 +18,7 @@ from core.logger import setup_logger
 log = setup_logger("trading.portfolio")
 
 DATA_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "data")
+CONFIG_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "config")
 STATE_FILE = os.path.join(DATA_DIR, "portfolio_state.json")
 EQUITY_HISTORY_FILE = os.path.join(DATA_DIR, "equity_history.json")
 
@@ -123,6 +124,12 @@ class PortfolioState:
             pos["unrealized_pnl_pct"] = round(pnl_pct, 2)
             total_unrealized_pnl += pnl
 
+            # Track MAE (max adverse excursion) and MFE (max favorable excursion)
+            if pnl_pct < pos.get("mae_pct", 0.0):
+                pos["mae_pct"] = round(pnl_pct, 2)
+            if pnl_pct > pos.get("mfe_pct", 0.0):
+                pos["mfe_pct"] = round(pnl_pct, 2)
+
         # Base equity = current equity minus old unrealized (gives capital + realized gains)
         base_equity = current_equity - old_unrealized
         new_equity = base_equity + total_unrealized_pnl
@@ -132,9 +139,46 @@ class PortfolioState:
         )
 
         self.update_equity(new_equity)
+        self._check_position_weight_drift(positions, new_equity)
         self.persist()
         event_bus.emit("portfolio", "updated", self.snapshot())
         return new_equity
+
+    def _check_position_weight_drift(
+        self, positions: list[dict[str, Any]], equity: float
+    ) -> None:
+        """Log warning and emit event if any position drifts above max_position_pct."""
+        if equity <= 0:
+            return
+
+        try:
+            config_path = os.path.join(CONFIG_DIR, "risk_params.json")
+            with open(config_path) as f:
+                risk_params = json.load(f)
+            max_position_pct = risk_params.get("max_position_pct", 7.0)
+        except Exception:
+            max_position_pct = 7.0
+
+        for pos in positions:
+            current_price = pos.get("current_price", 0.0)
+            quantity = pos.get("quantity", 0.0)
+            asset = pos.get("asset", "unknown")
+            if current_price <= 0 or quantity <= 0:
+                continue
+            weight_pct = (current_price * quantity) / equity * 100
+            if weight_pct > max_position_pct:
+                log.warning(
+                    "POSITION WEIGHT DRIFT: %s is %.2f%% of equity (max %.1f%%)",
+                    asset, weight_pct, max_position_pct,
+                )
+                event_bus.emit("risk", "position_weight_drift", {
+                    "asset": asset,
+                    "weight_pct": round(weight_pct, 2),
+                    "max_position_pct": max_position_pct,
+                    "current_price": current_price,
+                    "quantity": quantity,
+                    "equity": equity,
+                })
 
     def record_trade(self, pnl: float) -> None:
         """Record a completed trade and update stats."""

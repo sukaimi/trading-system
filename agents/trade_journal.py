@@ -100,6 +100,8 @@ class TradeJournal:
                     "thesis_correct": exit_data.get("thesis_correct"),
                     "exit_reason": exit_data.get("exit_reason", ""),
                     "hold_duration_hours": exit_data.get("hold_duration_hours", 0.0),
+                    "mae_pct": exit_data.get("mae_pct", 0.0),
+                    "mfe_pct": exit_data.get("mfe_pct", 0.0),
                 }
                 entry_dict["outcome"] = outcome
 
@@ -132,10 +134,14 @@ class TradeJournal:
         return record
 
     def record_killed_trade(
-        self, thesis: TradeThesis, verdict: DevilsVerdict
+        self,
+        thesis: TradeThesis,
+        verdict: DevilsVerdict,
+        signal: SignalAlert | None = None,
+        killed_by: str = "devils_advocate",
     ) -> dict[str, Any]:
-        """Record a trade killed by Devil's Advocate."""
-        record = {
+        """Record a trade killed by Devil's Advocate or Risk Manager."""
+        record: dict[str, Any] = {
             "type": "killed_trade",
             "timestamp": datetime.utcnow().isoformat(),
             "asset": thesis.asset,
@@ -146,9 +152,30 @@ class TradeJournal:
             "flags_raised": verdict.flags_raised,
             "fatal_flaws": verdict.fatal_flaws,
             "final_reasoning": verdict.final_reasoning,
+            "killed_by": killed_by,
+            "hypothetical_entry_price": thesis.supporting_data.get("current_price", 0),
         }
+
+        # Include signal data if available
+        if signal is not None:
+            record["signal_strength"] = signal.signal_strength
+            record["signal_payload"] = {
+                "headline": signal.headline,
+                "sentiment": signal.sentiment.value,
+                "category": signal.category.value,
+                "urgency": signal.urgency.value,
+            }
+        else:
+            record["signal_strength"] = thesis.confidence
+            record["signal_payload"] = {
+                "headline": thesis.triggering_alert_id,
+                "sentiment": "",
+                "category": "",
+                "urgency": "",
+            }
+
         self._append_entry(record)
-        log.info("Recorded killed trade for %s", thesis.asset)
+        log.info("Recorded killed trade for %s (killed by %s)", thesis.asset, killed_by)
         return record
 
     def assemble_weekly_package(

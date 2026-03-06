@@ -1,6 +1,6 @@
 {
   "min_confidence_for_trade": 0.20,
-  "max_open_positions": 8,
+  "max_open_positions": 10,
   "signal_weights": {
     "fundamental": 0.35,
     "technical": 0.40,

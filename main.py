@@ -129,9 +129,10 @@ def main():
         status = heartbeat.check()
         if not status.all_healthy:
             log.warning("Heartbeat reported failures: %s", status.failures)
-        # Run stop-loss + take-profit checks (Tier 0 — deterministic, every 5 min)
+        # Run stop-loss + take-profit + holding period checks (Tier 0 — deterministic, every 5 min)
         pipeline.check_stop_losses()
         pipeline.check_take_profits()
+        pipeline.check_holding_periods()
         # Recalculate equity with live market prices
         pipeline.recalculate_equity()
         # Run circuit breaker check alongside heartbeat
@@ -188,17 +189,18 @@ def main():
 
     # 10. Register all schedules (wrapped for dashboard events)
     schedule.every(5).minutes.do(_emit_task("heartbeat", run_heartbeat))
-    schedule.every(30).minutes.do(_emit_task("news_scan", run_news_scan))
-    schedule.every().day.at("23:55").do(_emit_task("chart_scan", run_chart_scan))            # 07:55 SGT — before Asian Open
-    schedule.every().day.at("07:55").do(_emit_task("chart_scan", run_chart_scan))            # 15:55 SGT — before European Overlap
-    schedule.every().day.at("13:55").do(_emit_task("chart_scan", run_chart_scan))            # 21:55 SGT — before US Close
+    schedule.every(15).minutes.do(_emit_task("news_scan", run_news_scan))
+    schedule.every().day.at("00:55").do(_emit_task("chart_scan", run_chart_scan))            # 08:55 SGT — before Asian session
+    schedule.every().day.at("06:55").do(_emit_task("chart_scan", run_chart_scan))            # 14:55 SGT — before European session
+    schedule.every().day.at("12:55").do(_emit_task("chart_scan", run_chart_scan))            # 20:55 SGT — before US session
+    schedule.every().day.at("18:55").do(_emit_task("chart_scan", run_chart_scan))            # 02:55 SGT — overnight scan
     schedule.every().day.at("00:00").do(_emit_task("asian_open", run_asian_open))            # 08:00 SGT
     schedule.every().day.at("08:00").do(_emit_task("european_overlap", run_european_overlap))  # 16:00 SGT
     schedule.every().day.at("14:00").do(_emit_task("us_close", run_us_close))               # 22:00 SGT
     schedule.every().day.at("15:00").do(_emit_task("daily_summary", run_daily_summary))     # 23:00 SGT
     schedule.every().day.at("16:00").do(_emit_task("daily_reset", run_daily_reset))         # 00:00 SGT (next day)
     schedule.every().sunday.at("15:00").do(_emit_task("weekly_review", run_weekly_review))  # 23:00 SGT Sunday
-    log.info("All schedules registered (11 total)")
+    log.info("All schedules registered (12 total)")
 
     # Register signal handlers for graceful shutdown
     signal.signal(signal.SIGINT, _shutdown)

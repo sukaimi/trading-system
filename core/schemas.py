@@ -275,6 +275,8 @@ class TradeOutcome(BaseModel):
     thesis_correct: Optional[bool] = None
     exit_reason: Optional[str] = None
     hold_duration_hours: Optional[float] = None
+    mae_pct: Optional[float] = None
+    mfe_pct: Optional[float] = None
 
 
 # ── Journal Entry (Trade Journal → Storage) ───────────────────────────

@@ -91,6 +91,33 @@ class RiskManager:
         if not execution_order.get("stop_loss"):
             return False, "No stop-loss defined — rejected", None
 
+        # Check 7: Sector concentration limit
+        sector_groups = {
+            "tech": ["AAPL", "NVDA", "TSLA", "AMZN", "META"],
+            "indices": ["SPY"],
+            "crypto": ["BTC", "ETH"],
+            "commodities": ["GLDM", "SLV"],
+            "bonds": ["TLT"],
+            "energy": ["XLE"],
+            "asia": ["FXI", "EWS"],
+        }
+        asset_sector = None
+        for sector, members in sector_groups.items():
+            if asset in members:
+                asset_sector = sector
+                break
+        if asset_sector:
+            same_sector_count = sum(
+                1 for pos in open_positions
+                if pos.get("asset") in sector_groups[asset_sector]
+            )
+            if same_sector_count >= 3:
+                return (
+                    False,
+                    f"Sector concentration limit: {same_sector_count} {asset_sector} positions already held",
+                    None,
+                )
+
         log.info("Order validated: %s %s", execution_order.get("direction"), asset)
         return True, "APPROVED", execution_order
 
