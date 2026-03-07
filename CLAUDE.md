@@ -36,16 +36,18 @@ Emergency: CircuitBreaker → halt trading → auto-recovery after 6h cooldown
 ```
 trading-system/
 ├── agents/          # 6 agent modules
-├── core/            # 21 core modules (schemas, llm_client, pipeline, portfolio, risk_manager,
+├── core/            # 27 core modules (schemas, llm_client, pipeline, portfolio, risk_manager,
 │                    #   executor, routing_executor, coinbase_executor, alpaca_executor,
 │                    #   paper_executor, heartbeat, logger, self_optimizer, cost_tracker,
 │                    #   event_bus, ga4_tracker, asset_registry, phantom_tracker,
-│                    #   signal_tracker, regime_classifier, earnings_calendar)
+│                    #   signal_tracker, regime_classifier, earnings_calendar,
+│                    #   adaptive_stops, session_analyzer, confidence_calibrator,
+│                    #   phantom_analyzer, regime_strategy)
 ├── tools/           # 5 tools (news_fetcher, market_data, technical_indicators, correlation, telegram_bot)
 ├── dashboard/       # FastAPI dashboard server + static files (index.html, agent-floor.html, lotus-creature.js)
 ├── config/          # Dynamic params JSON (updated weekly by SelfOptimizer)
 ├── data/            # Persisted state, trade journal, logs, weekly reviews (gitignored)
-├── tests/           # 31 test files, 409 tests (pytest)
+├── tests/           # 37 test files, 541 tests (pytest)
 ├── docs/            # PRD, Lotus spec
 ├── main.py          # Entry point — 12-task scheduler + dashboard
 └── requirements.txt
@@ -151,6 +153,7 @@ Optional: DASHBOARD_PORT (default 8080), DASHBOARD_ALLOWED_ORIGINS, GA4_MEASUREM
 - Acceleration features: 15-min news scan, 4x chart scan, 72h forced exit, MAE/MFE tracking, sector concentration, take-profit floor (5%), position weight drift monitoring
 - **Tier 1 upgrades**: ATR dynamic stops/TP, ATR position sizing, pre-LLM filter, loss throttling, phantom→DA feedback, signal accuracy→NewsScout feedback, correlation→DA feedback
 - **Tier 2 upgrades**: Trailing stops, regime classifier (5 regimes), adaptive stops, correlation-based position limits, earnings calendar
+- **Tier 3 learning systems**: Adaptive stop optimizer, session analyzer, confidence calibrator, phantom analyzer, regime strategy selector, enhanced SelfOptimizer with data-driven directives
 
 ### Pending
 - [ ] **Phase 5: Optimization** — Analyze paper trading data, tune parameters (needs 10-20+ trades)
