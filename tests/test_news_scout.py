@@ -75,7 +75,14 @@ class TestApplyFilters:
         assert len(result) == 1
         assert result[0].signal_strength == pytest.approx(0.5, abs=0.01)
 
-    def test_speculation_penalty(self, scout):
+    @patch("agents.news_scout.datetime")
+    def test_speculation_penalty(self, mock_dt, scout):
+        # Mock to a weekday to avoid weekend penalty
+        from datetime import datetime
+        fake_now = datetime(2026, 3, 2, 12, 0, 0)  # Monday
+        mock_dt.utcnow.return_value = fake_now
+        mock_dt.side_effect = lambda *a, **kw: datetime(*a, **kw)
+
         raw = [{"signal_strength": 0.8, "headline": "BTC could rally", "asset": "BTC", "sentiment": "bullish", "category": "crypto_specific", "new_information": "might go up", "urgency": "medium"}]
         result = scout._apply_filters(raw)
         # 0.8 - 0.3 (could/might) = 0.5 — above threshold
