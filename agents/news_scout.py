@@ -149,13 +149,13 @@ class NewsScout:
         for sig in raw_signals:
             strength = sig.get("signal_strength", 0.0)
 
-            # Weekend penalty
-            if is_weekend:
+            # Weekend penalty (crypto trades 24/7, exempt from weekend penalty)
+            if is_weekend and sig.get("asset", "MACRO") not in {"BTC", "ETH"}:
                 strength -= weekend_penalty
 
             # Already priced in penalty
             if sig.get("already_priced_in", False):
-                strength -= 0.2
+                strength -= 0.35
 
             # Speculation filter
             headline = sig.get("headline", "")

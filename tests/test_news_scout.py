@@ -71,9 +71,9 @@ class TestApplyFilters:
 
         raw = [{"signal_strength": 0.7, "headline": "Old news", "asset": "BTC", "sentiment": "bullish", "category": "macro", "new_information": "something", "urgency": "medium", "already_priced_in": True}]
         result = scout._apply_filters(raw)
-        # 0.7 - 0.2 (priced in) = 0.5 — above default threshold 0.4
+        # 0.7 - 0.35 (priced in) = 0.35 — at default threshold 0.35
         assert len(result) == 1
-        assert result[0].signal_strength == pytest.approx(0.5, abs=0.01)
+        assert result[0].signal_strength == pytest.approx(0.35, abs=0.01)
 
     @patch("agents.news_scout.datetime")
     def test_speculation_penalty(self, mock_dt, scout):

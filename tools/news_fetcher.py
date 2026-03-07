@@ -29,6 +29,8 @@ RSS_FEEDS = {
     "cnbc": "https://search.cnbc.com/rs/search/combinedcms/view.xml?partnerId=wrss01&id=100003114",
     "seeking_alpha": "https://seekingalpha.com/market_currents.xml",
     "investing_com": "https://www.investing.com/rss/news.rss",
+    "straits_times": "https://www.straitstimes.com/news/business/rss.xml",
+    "scmp": "https://www.scmp.com/rss/91/feed",
 }
 
 ALPHA_VANTAGE_URL = "https://www.alphavantage.co/query"
@@ -46,6 +48,10 @@ AV_TICKERS = {
     "AMZN": "AMZN",
     "SPY": "SPY",
     "META": "META",
+    "EWS": "EWS",
+    "FXI": "FXI",
+    "QQQ": "QQQ",
+    "GLD": "GLD",
 }
 
 
@@ -135,15 +141,25 @@ class NewsFetcher:
             data = resp.json()
             articles = []
             for item in data.get("feed", []):
-                articles.append(
-                    self._standardize_article(
-                        title=item.get("title", ""),
-                        summary=item.get("summary", ""),
-                        link=item.get("url", ""),
-                        published=item.get("time_published", ""),
-                        source=item.get("source", "alpha_vantage"),
-                    )
+                article = self._standardize_article(
+                    title=item.get("title", ""),
+                    summary=item.get("summary", ""),
+                    link=item.get("url", ""),
+                    published=item.get("time_published", ""),
+                    source=item.get("source", "alpha_vantage"),
                 )
+                article["sentiment_score"] = item.get(
+                    "overall_sentiment_score", ""
+                )
+                # Find best relevance score among requested tickers
+                relevance = ""
+                for ts in item.get("ticker_sentiment", []):
+                    ticker_sym = ts.get("ticker", "")
+                    if ticker_sym in av_tickers.split(","):
+                        relevance = ts.get("relevance_score", "")
+                        break
+                article["relevance_score"] = relevance
+                articles.append(article)
             log.info("Fetched %d articles from Alpha Vantage", len(articles))
             return articles
         except Exception as e:

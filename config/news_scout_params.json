@@ -14,7 +14,7 @@
   "per_class_quotas": {
     "crypto": 2,
     "stock": 3,
-    "etf": 2,
+    "etf": 4,
     "MACRO": 1
   }
 }
