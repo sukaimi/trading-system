@@ -1292,7 +1292,7 @@ const PIPELINE_STAGES = ['news', 'techscan', 'analyst', 'chart', 'devil', 'risk'
 function updateClock() {
   const now = new Date();
   document.getElementById('clock').textContent =
-    now.toLocaleTimeString('en-US', { hour12: false, timeZone: 'UTC' }) + ' UTC';
+    now.toLocaleTimeString('en-US', { hour12: false, timeZone: 'Asia/Singapore' }) + ' SGT';
 }
 setInterval(updateClock, 1000);
 updateClock();
@@ -1314,7 +1314,7 @@ function fmtTime(iso) {
   if (!iso) return '--';
   try {
     const d = new Date(iso);
-    return d.toLocaleTimeString('en-US', { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' });
+    return d.toLocaleTimeString('en-US', { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit', timeZone: 'Asia/Singapore' });
   } catch { return '--'; }
 }
 
@@ -1671,7 +1671,7 @@ function buildActivityItem(e) {
 
 function buildActivityItemInner(e) {
   const t = new Date(e.timestamp);
-  const time = t.toLocaleTimeString('en-US', { hour12: false, hour: '2-digit', minute: '2-digit' });
+  const time = t.toLocaleTimeString('en-US', { hour12: false, hour: '2-digit', minute: '2-digit', timeZone: 'Asia/Singapore' });
   const cat = e.category || 'system';
   return `<span class="time">${time}</span>
     <span class="badge badge-${esc(cat)}">${esc(cat)}</span>
