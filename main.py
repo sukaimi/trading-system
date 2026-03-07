@@ -129,7 +129,8 @@ def main():
         status = heartbeat.check()
         if not status.all_healthy:
             log.warning("Heartbeat reported failures: %s", status.failures)
-        # Run stop-loss + take-profit + holding period checks (Tier 0 — deterministic, every 5 min)
+        # Run trailing stop update + stop-loss + take-profit + holding period checks (Tier 0 — deterministic, every 5 min)
+        pipeline.update_trailing_stops()
         pipeline.check_stop_losses()
         pipeline.check_take_profits()
         pipeline.check_holding_periods()

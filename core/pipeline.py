@@ -497,6 +497,135 @@ class TradingPipeline:
 
         return self._execute_trade(signal, thesis, verdict, result)
 
+    def update_trailing_stops(self) -> list[dict[str, Any]]:
+        """Update trailing stop-loss levels for open positions.
+
+        Called every 5 minutes from the heartbeat cycle, BEFORE check_stop_losses().
+        Tier 0: pure Python, no LLM, deterministic.
+
+        For each position that has moved favorably beyond the activation threshold,
+        ratchet the stop-loss price upward (long) or downward (short) to lock in profits.
+        The stop never moves backward (against profit protection).
+        """
+        if self._portfolio.halted:
+            log.info("System halted — skipping trailing stop update")
+            return []
+
+        activation_pct = self._risk_params.get("trailing_stop_activation_pct", 2.0) / 100.0
+        distance_pct = self._risk_params.get("trailing_stop_distance_pct", 1.5) / 100.0
+        atr_mult = self._risk_params.get("trailing_stop_atr_mult", 1.0)
+
+        positions = self._portfolio.open_positions
+        updated: list[dict[str, Any]] = []
+        market_data = MarketDataFetcher()
+
+        for pos in positions:
+            stop_price = pos.get("stop_loss_price")
+            if stop_price is None:
+                continue
+
+            asset = pos.get("asset", "")
+            trade_id = pos.get("trade_id", "")
+            direction = pos.get("direction", "long")
+            entry_price = pos.get("entry_price", 0)
+            if entry_price <= 0:
+                continue
+
+            # Fetch current price
+            try:
+                price_data = market_data.get_price(asset)
+                current_price = price_data.get("price", 0)
+            except Exception as e:
+                log.error("Trailing stop: price fetch failed for %s: %s", asset, e)
+                continue
+
+            if current_price <= 0:
+                continue
+
+            # Check if price has moved favorably beyond activation threshold
+            if direction == "long":
+                favorable_move_pct = (current_price - entry_price) / entry_price
+            else:
+                favorable_move_pct = (entry_price - current_price) / entry_price
+
+            if favorable_move_pct < activation_pct:
+                continue
+
+            # Calculate trail distance: max(ATR-based, flat %)
+            atr = pos.get("supporting_data", {}).get("atr_14") if isinstance(pos.get("supporting_data"), dict) else None
+            if atr and atr > 0:
+                trail_distance = max(atr * atr_mult, current_price * distance_pct)
+            else:
+                trail_distance = current_price * distance_pct
+
+            # Calculate new stop price
+            if direction == "long":
+                new_stop = current_price - trail_distance
+                # Only move stop upward (protective direction)
+                if new_stop <= stop_price:
+                    continue
+            else:
+                new_stop = current_price + trail_distance
+                # Only move stop downward (protective direction)
+                if new_stop >= stop_price:
+                    continue
+
+            new_stop = round(new_stop, 2)
+
+            # Preserve original stop-loss price on first activation
+            was_active = pos.get("trailing_stop_active", False)
+            if not was_active:
+                pos["original_stop_loss_price"] = stop_price
+                pos["trailing_stop_active"] = True
+
+            old_stop = stop_price
+            pos["stop_loss_price"] = new_stop
+
+            log.info(
+                "TRAILING STOP updated: %s %s (trade %s) — stop moved $%.2f → $%.2f (price $%.2f, trail $%.2f)",
+                direction.upper(), asset, trade_id, old_stop, new_stop, current_price, trail_distance,
+            )
+
+            event_bus.emit("trailing_stop", "updated", {
+                "trade_id": trade_id,
+                "asset": asset,
+                "direction": direction,
+                "old_stop": old_stop,
+                "new_stop": new_stop,
+                "current_price": current_price,
+                "trail_distance": round(trail_distance, 2),
+                "trailing_stop_active": True,
+            })
+
+            # Send Telegram alert on first activation
+            if not was_active:
+                try:
+                    self._telegram.send_alert(
+                        f"TRAILING STOP activated: {direction.upper()} {asset}\n"
+                        f"Entry: ${entry_price:.2f} | Price: ${current_price:.2f}\n"
+                        f"Stop moved: ${old_stop:.2f} → ${new_stop:.2f}"
+                    )
+                except Exception as e:
+                    log.error("Trailing stop Telegram alert failed: %s", e)
+
+            updated.append({
+                "trade_id": trade_id,
+                "asset": asset,
+                "direction": direction,
+                "old_stop": old_stop,
+                "new_stop": new_stop,
+                "current_price": current_price,
+                "first_activation": not was_active,
+            })
+
+        if updated:
+            try:
+                self._portfolio.persist()
+            except Exception as e:
+                log.error("Portfolio persist after trailing stop updates failed: %s", e)
+
+        return updated
+
     def check_stop_losses(self) -> list[dict[str, Any]]:
         """Check all open positions against their stop-loss levels.
 
