@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import os
+from pathlib import Path
 from typing import Any
 
 from core.llm_client import LLMClient
@@ -128,6 +129,11 @@ class DevilsAdvocate:
             thesis=json.dumps(trade_thesis.model_dump(), default=str),
             portfolio_state=json.dumps(portfolio_state, default=str),
         )
+
+        # Append phantom trade feedback (false kill rate calibration)
+        phantom_context = self._load_phantom_context()
+        if phantom_context:
+            prompt += f"\n\n{phantom_context}"
         result = self._llm.call_deepseek(prompt, SYSTEM_PROMPT)
 
         if result.get("error"):
@@ -277,6 +283,29 @@ class DevilsAdvocate:
         if challenges.assumption_stress_test.worst_case_loss_usd > 5.0:
             flags += 1
         return flags
+
+    def _load_phantom_context(self) -> str:
+        """Load phantom trade summary and return calibration context for the prompt."""
+        phantom_file = Path(__file__).parent.parent / "data" / "phantom_trades.json"
+        try:
+            if not phantom_file.exists():
+                return ""
+            with open(phantom_file) as f:
+                trades = json.load(f)
+            checked = [t for t in trades if t.get("outcome_checked")]
+            if len(checked) < 3:
+                return ""
+            won = sum(1 for t in checked if (t.get("outcome_pnl_pct") or 0) > 0)
+            lost = len(checked) - won
+            false_kill_rate = round(won / len(checked) * 100, 1)
+            context = f"Phantom trade data: {len(checked)} killed trades checked — {won} would have won, {lost} would have lost (false kill rate: {false_kill_rate}%)."
+            if false_kill_rate > 40:
+                context += " You have been killing too many profitable trades. Be less aggressive."
+            elif false_kill_rate < 20:
+                context += " Your kill accuracy is excellent. Maintain current standards."
+            return context
+        except Exception:
+            return ""
 
     def _load_params(self) -> dict[str, Any]:
         try:

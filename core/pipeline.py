@@ -38,6 +38,7 @@ from core.schemas import (
     TradeThesis,
     Verdict,
 )
+from tools.correlation import CorrelationAnalyzer
 from tools.market_data import MarketDataFetcher
 from tools.telegram_bot import TelegramNotifier
 
@@ -211,6 +212,29 @@ class TradingPipeline:
             "outcome": "no_trade",
         }
 
+        # ── Pre-LLM filter (Tier 0, free) ─────────────────────────────────
+        # Skip if we already hold this asset — avoids wasting an LLM call
+        held_assets = {
+            pos.get("asset") for pos in self._portfolio.open_positions
+        }
+        if signal.asset in held_assets:
+            log.info(
+                "PRE-FILTER: skipping %s — already holding position",
+                signal.asset,
+            )
+            result["outcome"] = "pre_filtered"
+            result["filter_reason"] = "already_holding"
+            if signal.signal_id:
+                self._signal_tracker.record_outcome(
+                    signal.signal_id, "pre_filtered"
+                )
+            return {
+                "signal": signal,
+                "result": result,
+                "thesis": None,
+                "verdict": None,
+            }
+
         # Step 1: Market Analyst generates thesis
         try:
             thesis = self._analyst.analyze_signal(signal)
@@ -247,6 +271,37 @@ class TradingPipeline:
         # Step 2: Devil's Advocate challenges
         try:
             portfolio_state = self._portfolio.snapshot()
+
+            # Compute actual correlations between candidate asset and open positions
+            open_positions = portfolio_state.get("open_positions", [])
+            if open_positions:
+                try:
+                    mdf = MarketDataFetcher()
+                    corr_analyzer = CorrelationAnalyzer(market_data_fetcher=mdf)
+                    candidate_asset = thesis.asset
+                    candidate_ohlcv = mdf.get_ohlcv(candidate_asset, period="1mo", interval="1d")
+                    candidate_prices = [bar["close"] for bar in candidate_ohlcv if "close" in bar]
+
+                    corr_pairs = []
+                    for pos in open_positions:
+                        pos_asset = pos.get("asset", "")
+                        if not pos_asset or pos_asset == candidate_asset:
+                            continue
+                        try:
+                            pos_ohlcv = mdf.get_ohlcv(pos_asset, period="1mo", interval="1d")
+                            pos_prices = [bar["close"] for bar in pos_ohlcv if "close" in bar]
+                            corr = corr_analyzer.pairwise_correlation(candidate_prices, pos_prices)
+                            corr_pairs.append(f"{candidate_asset}-{pos_asset}: {corr:.2f}")
+                        except Exception:
+                            continue
+
+                    if corr_pairs:
+                        portfolio_state["actual_correlations"] = (
+                            f"Actual 30d correlations with open positions: {', '.join(corr_pairs)}"
+                        )
+                except Exception as e:
+                    log.debug("Correlation computation skipped: %s", e)
+
             verdict = self._devil.challenge(thesis, portfolio_state)
         except Exception as e:
             log.error("Devil's Advocate failed for %s: %s", signal.asset, e)
@@ -1327,6 +1382,21 @@ class TradingPipeline:
             position_pct = 2.0
             log.info("Negative EV (%.4f) — micro position 2%% for data", ev_result["ev"])
 
+        # ── Consecutive loss throttling ────────────────────────────────────
+        consecutive_losses = self._portfolio.consecutive_losses
+        if consecutive_losses >= 5:
+            position_pct *= 0.25
+            log.warning(
+                "LOSS THROTTLE: %d consecutive losses — position reduced to %.1f%% (25%% of normal)",
+                consecutive_losses, position_pct,
+            )
+        elif consecutive_losses >= 3:
+            position_pct *= 0.5
+            log.warning(
+                "LOSS THROTTLE: %d consecutive losses — position reduced to %.1f%% (50%% of normal)",
+                consecutive_losses, position_pct,
+            )
+
         # Calculate stop-loss from invalidation level, or default to 5% from price
         stop_loss = None
         if thesis.invalidation_level:
@@ -1348,14 +1418,26 @@ class TradingPipeline:
             except Exception:
                 pass
 
-        # Default stop-loss if none provided: use config or 3% adverse move
+        # Default stop-loss if none provided: use ATR-based stop, fall back to flat %
+        atr = thesis.supporting_data.get("atr_14")
         if stop_loss is None and current_price > 0:
-            sl_pct = self._risk_params.get("default_stop_loss_pct", 3.0) / 100.0
-            if thesis.direction.value == "long":
-                stop_loss = round(current_price * (1 - sl_pct), 2)
+            sl_atr_mult = self._risk_params.get("stop_loss_atr_mult", 2.0)
+            if atr and atr > 0:
+                # ATR-based dynamic stop
+                if thesis.direction.value == "long":
+                    stop_loss = round(current_price - (atr * sl_atr_mult), 2)
+                else:
+                    stop_loss = round(current_price + (atr * sl_atr_mult), 2)
+                log.info("ATR stop-loss set at $%.2f (ATR=%.2f, mult=%.1f from $%.2f)", stop_loss, atr, sl_atr_mult, current_price)
             else:
-                stop_loss = round(current_price * (1 + sl_pct), 2)
-            log.info("Default stop-loss set at $%.2f (%.0f%% from $%.2f)", stop_loss, sl_pct * 100, current_price)
+                # Flat % fallback when ATR is unavailable
+                sl_pct = self._risk_params.get("default_stop_loss_pct", 3.0) / 100.0
+                if thesis.direction.value == "long":
+                    stop_loss = round(current_price * (1 - sl_pct), 2)
+                else:
+                    stop_loss = round(current_price * (1 + sl_pct), 2)
+                log.info("Default stop-loss set at $%.2f (%.0f%% from $%.2f)", stop_loss, sl_pct * 100, current_price)
+
         # Calculate take-profit from risk/reward ratio + stop-loss distance
         take_profit = None
         if stop_loss and current_price > 0:
@@ -1367,22 +1449,45 @@ class TradingPipeline:
                 take_profit = round(current_price - reward_distance, 2)
             log.info("Take-profit set at $%.2f (%.1f:1 R:R from $%.2f)", take_profit, rr, current_price)
 
-        # Ensure take-profit is at least the default percentage from config
-        tp_pct = self._risk_params.get("default_take_profit_pct", 5.0) / 100.0
-        if current_price > 0 and tp_pct > 0:
+        # Ensure take-profit is at least the ATR-based or default percentage minimum
+        tp_atr_mult = self._risk_params.get("take_profit_atr_mult", 3.0)
+        if current_price > 0 and atr and atr > 0:
+            # ATR-based minimum take-profit
             if thesis.direction.value == "long":
-                min_tp = round(current_price * (1 + tp_pct), 2)
+                min_tp = round(current_price + (atr * tp_atr_mult), 2)
                 if take_profit is None or take_profit < min_tp:
                     take_profit = min_tp
-                    log.info("Take-profit raised to default minimum $%.2f (%.0f%% from $%.2f)", take_profit, tp_pct * 100, current_price)
+                    log.info("Take-profit raised to ATR minimum $%.2f (ATR=%.2f, mult=%.1f)", take_profit, atr, tp_atr_mult)
             else:
-                min_tp = round(current_price * (1 - tp_pct), 2)
+                min_tp = round(current_price - (atr * tp_atr_mult), 2)
                 if take_profit is None or take_profit > min_tp:
                     take_profit = min_tp
-                    log.info("Take-profit raised to default minimum $%.2f (%.0f%% from $%.2f)", take_profit, tp_pct * 100, current_price)
+                    log.info("Take-profit raised to ATR minimum $%.2f (ATR=%.2f, mult=%.1f)", take_profit, atr, tp_atr_mult)
+        else:
+            # Flat % fallback when ATR is unavailable
+            tp_pct = self._risk_params.get("default_take_profit_pct", 5.0) / 100.0
+            if current_price > 0 and tp_pct > 0:
+                if thesis.direction.value == "long":
+                    min_tp = round(current_price * (1 + tp_pct), 2)
+                    if take_profit is None or take_profit < min_tp:
+                        take_profit = min_tp
+                        log.info("Take-profit raised to default minimum $%.2f (%.0f%% from $%.2f)", take_profit, tp_pct * 100, current_price)
+                else:
+                    min_tp = round(current_price * (1 - tp_pct), 2)
+                    if take_profit is None or take_profit > min_tp:
+                        take_profit = min_tp
+                        log.info("Take-profit raised to default minimum $%.2f (%.0f%% from $%.2f)", take_profit, tp_pct * 100, current_price)
 
+        # ATR-based position sizing via RiskManager, fall back to %-based
         if current_price > 0 and equity > 0:
-            position_value = equity * (position_pct / 100.0)
+            if atr and atr > 0 and hasattr(self._risk, "calculate_position_size"):
+                position_value = self._risk.calculate_position_size(confidence, atr, equity)
+                # Update position_pct to reflect ATR-based sizing
+                position_pct = min((position_value / equity) * 100.0, 7.0)
+                position_pct = max(position_pct, 2.0)  # Minimum 2% micro position
+                log.info("ATR position sizing: $%.2f (%.1f%% of $%.2f)", position_value, position_pct, equity)
+            else:
+                position_value = equity * (position_pct / 100.0)
             quantity = position_value / current_price
         else:
             quantity = 0.0

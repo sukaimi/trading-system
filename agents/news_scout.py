@@ -11,6 +11,7 @@ import os
 import random
 import re
 from datetime import datetime
+from pathlib import Path
 from typing import Any
 
 from core.llm_client import LLMClient
@@ -105,6 +106,12 @@ class NewsScout:
 
         valid_assets = ", ".join(f'"{a}"' for a in get_tradeable_assets() + ["MACRO"])
         prompt = CLASSIFY_PROMPT.format(articles=article_text, valid_assets=valid_assets)
+
+        # Append historical signal accuracy context
+        accuracy_context = self._load_signal_accuracy_context()
+        if accuracy_context:
+            prompt += f"\n\n{accuracy_context}"
+
         result = self._llm.call_deepseek(prompt, SYSTEM_PROMPT)
 
         if isinstance(result, list):
@@ -220,6 +227,46 @@ class NewsScout:
 
         log.info("Produced %d signal alerts after filtering", len(alerts))
         return alerts
+
+    def _load_signal_accuracy_context(self) -> str:
+        """Load signal accuracy data and return calibration context for the prompt."""
+        data_file = Path(__file__).parent.parent / "data" / "signal_accuracy.json"
+        try:
+            if not data_file.exists():
+                return ""
+            with open(data_file) as f:
+                signals = json.load(f)
+
+            # Compute per-category win rates from closed trades
+            by_category: dict[str, dict[str, int]] = {}
+            total_wins = 0
+            total_closed = 0
+            for s in signals:
+                if s.get("exit_price") is None:
+                    continue
+                cat = s.get("category", "unknown")
+                if cat not in by_category:
+                    by_category[cat] = {"wins": 0, "total": 0}
+                by_category[cat]["total"] += 1
+                total_closed += 1
+                if s.get("signal_correct"):
+                    by_category[cat]["wins"] += 1
+                    total_wins += 1
+
+            if total_closed < 5:
+                return ""
+
+            lines = ["Historical signal accuracy:"]
+            for cat, stats in sorted(by_category.items()):
+                if stats["total"] >= 5:
+                    wr = round(stats["wins"] / stats["total"] * 100)
+                    lines.append(f"  {cat} signals have {wr}% win rate ({stats['total']} trades).")
+            overall_wr = round(total_wins / total_closed * 100)
+            lines.append(f"  Overall signal precision: {overall_wr}% ({total_closed} closed trades).")
+            lines.append("Calibrate your confidence accordingly.")
+            return "\n".join(lines)
+        except Exception:
+            return ""
 
     def _load_params(self) -> dict[str, Any]:
         try:
