@@ -194,6 +194,75 @@ async def get_regime() -> dict[str, Any]:
         return {"per_asset": {}, "dominant_regime": "RANGING", "regime_agreement": 0.0}
 
 
+@app.get("/api/stop-recommendations")
+async def get_stop_recommendations() -> dict[str, Any]:
+    """Return adaptive stop-loss/take-profit recommendations from trade history."""
+    from core.adaptive_stops import AdaptiveStopOptimizer
+    opt = AdaptiveStopOptimizer()
+    return opt.analyze()
+
+
+@app.get("/api/session-analysis")
+async def get_session_analysis() -> dict[str, Any]:
+    """Return trading session performance analysis."""
+    from core.session_analyzer import SessionAnalyzer
+    analyzer = SessionAnalyzer()
+    return analyzer.analyze()
+
+
+@app.get("/api/confidence-calibration")
+async def get_confidence_calibration() -> dict[str, Any]:
+    from core.confidence_calibrator import ConfidenceCalibrator
+    cal = ConfidenceCalibrator()
+    return cal.analyze()
+
+
+@app.get("/api/phantom-analysis")
+async def get_phantom_analysis() -> dict[str, Any]:
+    from core.phantom_analyzer import PhantomAnalyzer
+    analyzer = PhantomAnalyzer()
+    return analyzer.analyze()
+
+
+@app.get("/api/learning-insights")
+async def get_learning_insights() -> dict[str, Any]:
+    """Return learning system insights from the SelfOptimizer."""
+    from core.self_optimizer import SelfOptimizer
+    try:
+        optimizer = SelfOptimizer()
+        return optimizer.gather_learning_insights()
+    except Exception as e:
+        log.warning("Learning insights fetch failed: %s", e)
+        return {
+            "stop_recommendations": None,
+            "confidence_calibration": None,
+            "phantom_analysis": None,
+            "session_analysis": None,
+            "actionable_insights": [],
+        }
+
+
+@app.get("/api/regime-strategy")
+async def get_regime_strategy() -> dict[str, Any]:
+    """Return current regime strategy presets and active regime per asset."""
+    from core.regime_strategy import RegimeStrategySelector
+    try:
+        selector = RegimeStrategySelector()
+        result: dict[str, Any] = {"presets": selector.presets, "per_asset": {}}
+        regime_data = await asyncio.to_thread(_fetch_regime)
+        per_asset_regimes = regime_data.get("per_asset", {})
+        for asset, info in per_asset_regimes.items():
+            regime = info.get("regime", "LOW_VOLATILITY") if isinstance(info, dict) else str(info)
+            result["per_asset"][asset] = {
+                "regime": regime,
+                "adjustments": selector.get_adjustments(regime),
+            }
+        return result
+    except Exception as e:
+        log.warning("Regime strategy fetch failed: %s", e)
+        return {"presets": {}, "per_asset": {}}
+
+
 @app.get("/api/events/recent")
 async def get_recent_events() -> list[dict[str, Any]]:
     return event_bus.get_recent(50)

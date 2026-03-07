@@ -320,8 +320,9 @@ class TestBuildExecutionOrder:
         )
         order = pipeline._build_execution_order(thesis, verdict)
         # stop = 57000, risk = 3000, reward = 3000 * 1.5 = 4500
-        # TP = 60000 + 4500 = 64500
-        assert order["take_profit"] == 64500.0
+        # Regime defaults to RANGING (mocked classifier fails), TP mult = 0.8
+        # TP distance = 4500 * 0.8 = 3600, TP = 60000 + 3600 = 63600
+        assert order["take_profit"] == 63600.0
         assert order["stop_loss"] == 57000.0
 
     def test_take_profit_calculated_from_rr_short(self, pipeline):
@@ -337,5 +338,6 @@ class TestBuildExecutionOrder:
         )
         order = pipeline._build_execution_order(thesis, verdict)
         # stop = 3500, risk = 300, reward = 300 * 2.0 = 600
-        # TP = 3200 - 600 = 2600
-        assert order["take_profit"] == 2600.0
+        # Regime defaults to RANGING (mocked classifier fails), TP mult = 0.8
+        # TP distance = 600 * 0.8 = 480, TP = 3200 - 480 = 2720
+        assert order["take_profit"] == 2720.0

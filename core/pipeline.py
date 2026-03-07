@@ -38,8 +38,11 @@ from core.schemas import (
     TradeThesis,
     Verdict,
 )
+from core.confidence_calibrator import ConfidenceCalibrator
 from core.earnings_calendar import EarningsCalendar
 from core.regime_classifier import RegimeClassifier
+from core.regime_strategy import RegimeStrategySelector
+from core.session_analyzer import SessionAnalyzer
 from tools.correlation import CorrelationAnalyzer
 from tools.market_data import MarketDataFetcher
 from tools.telegram_bot import TelegramNotifier
@@ -80,6 +83,9 @@ class TradingPipeline:
         self._signal_tracker = SignalAccuracyTracker()
         self._regime_classifier = RegimeClassifier(market_data_fetcher=MarketDataFetcher())
         self._earnings_cal = EarningsCalendar()
+        self._session_analyzer = SessionAnalyzer()
+        self._confidence_cal = ConfidenceCalibrator()
+        self._regime_strategy = RegimeStrategySelector()
 
         # Load risk params for auto-recovery cooldown + default stop-loss
         self._risk_params: dict[str, Any] = {}
@@ -1525,6 +1531,10 @@ class TradingPipeline:
             rr = 1.5
 
         confidence = verdict.confidence_adjusted if hasattr(verdict, "confidence_adjusted") and verdict.confidence_adjusted > 0 else thesis.confidence
+        raw_confidence = confidence
+        confidence = self._confidence_cal.calibrate_confidence(confidence)
+        if confidence != raw_confidence:
+            log.info("CONFIDENCE CALIBRATION: %.2f -> %.2f", raw_confidence, confidence)
         ev_result = self._calculate_ev(confidence, rr)
 
         if ev_result["positive_ev"]:
@@ -1564,6 +1574,20 @@ class TradingPipeline:
                 thesis.asset, days_until, position_pct,
             )
 
+        # ── Session weight adjustment ─────────────────────────────────────
+        try:
+            current_hour = datetime.now(timezone.utc).hour
+            session = self._session_analyzer.classify_session(current_hour)
+            session_weight = self._session_analyzer.get_session_weight(thesis.asset, session)
+            if session_weight != 1.0:
+                position_pct *= session_weight
+                log.info(
+                    "SESSION WEIGHT: %s %s session=%.2f → position %.1f%%",
+                    thesis.asset, session, session_weight, position_pct,
+                )
+        except Exception as e:
+            log.debug("Session weight failed for %s: %s", thesis.asset, e)
+
         # Calculate stop-loss from invalidation level, or default to 5% from price
         stop_loss = None
         if thesis.invalidation_level:
@@ -1596,6 +1620,20 @@ class TradingPipeline:
         regime_stop_mult = self._regime_classifier.get_initial_stop_multiplier(
             regime, self._risk_params
         )
+
+        # ── Regime strategy adjustments ───────────────────────────────────
+        regime_adj = self._regime_strategy.get_adjustments(regime, thesis.direction.value)
+        position_pct *= regime_adj["position_size_mult"]
+        confidence += regime_adj.get("confidence_adjustment", 0.0)
+        confidence = min(confidence, 1.0)
+
+        should_trade, regime_reason = self._regime_strategy.should_trade(
+            regime, confidence, thesis.direction.value
+        )
+        if not should_trade:
+            log.info("REGIME FILTER: %s -- %s", thesis.asset, regime_reason)
+            # Don't block -- reduce position to micro-size for data collection
+            position_pct = min(position_pct, 2.0)
 
         # Default stop-loss if none provided: use ATR-based stop, fall back to flat %
         atr = thesis.supporting_data.get("atr_14")
@@ -1657,6 +1695,17 @@ class TradingPipeline:
                         take_profit = min_tp
                         log.info("Take-profit raised to default minimum $%.2f (%.0f%% from $%.2f)", take_profit, tp_pct * 100, current_price)
 
+        # ── Apply regime take-profit multiplier ──────────────────────────
+        tp_mult = regime_adj.get("take_profit_mult", 1.0)
+        if take_profit is not None and current_price > 0 and tp_mult != 1.0:
+            tp_distance = abs(take_profit - current_price)
+            tp_distance *= tp_mult
+            if thesis.direction.value == "long":
+                take_profit = round(current_price + tp_distance, 2)
+            else:
+                take_profit = round(current_price - tp_distance, 2)
+            log.info("Regime TP adjusted [%s] to $%.2f (mult=%.1f)", regime, take_profit, tp_mult)
+
         # ATR-based position sizing via RiskManager, fall back to %-based
         if current_price > 0 and equity > 0:
             if atr and atr > 0 and hasattr(self._risk, "calculate_position_size"):
@@ -1684,4 +1733,6 @@ class TradingPipeline:
             "regime": regime,
             "regime_confidence": regime_info.get("confidence", 0.5),
             "regime_stop_multiplier": regime_stop_mult,
+            "regime_position_mult": regime_adj["position_size_mult"],
+            "regime_tp_mult": regime_adj.get("take_profit_mult", 1.0),
         }
