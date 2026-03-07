@@ -171,6 +171,7 @@ Optional: DASHBOARD_PORT (default 8080), DASHBOARD_ALLOWED_ORIGINS, GA4_MEASUREM
 - Always validate/fallback LLM enum responses — models don't always respect the schema.
 
 ### Portfolio State
+- **Equity drift between Alpaca and TradeHub**: Internal equity is tracked independently from Alpaca's broker equity. `sync_portfolio_with_broker()` logs the broker value but does NOT override internal equity. They will differ slightly (~0.05-0.1%) due to different price sources (CoinGecko vs Alpaca feed), timing (5-min refresh vs real-time), and spread/slippage. This is intentional during paper trading for cleaner analytics. Revisit when going live — broker equity is the real number.
 - **Phantom PnL from test orders**: Early Alpaca test orders created fake -40% daily PnL entries that persisted in `portfolio_state.json` and triggered the circuit breaker repeatedly. When resetting, clear BOTH `portfolio_state.json` AND `circuit_breaker_log.json`.
 - **Stop-loss prices must be persisted**: Positions need `quantity` and `stop_loss_price` fields saved to survive restarts. Added in Phase 4.
 
