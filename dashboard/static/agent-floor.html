@@ -482,9 +482,9 @@ function drawPlant(gx, gy) {
 function drawTickerBoard() {
   const { s } = getLayout();
 
-  // Left wall: gx=0, gy 5→13 (swapped with clocks — more space for 6 tickers)
+  // Left wall: gx=0, gy 5→15 (swapped with clocks — more space for 6 tickers)
   const pL = isoToScreen(0, 5);
-  const pR = isoToScreen(0, 13);
+  const pR = isoToScreen(0, 15);
   const wallDx = pR.x - pL.x;
   const wallDy = pR.y - pL.y;
   const wallLen = Math.sqrt(wallDx * wallDx + wallDy * wallDy);
@@ -1816,8 +1816,8 @@ function draw() {
 
   // Walls (brighter)
   const topLeft = isoToScreen(0, 0);
-  const backLeft = isoToScreen(0, GRID_SIZE - 1);
-  const backRight = isoToScreen(GRID_SIZE - 1, 0);
+  const backLeft = isoToScreen(0, GRID_SIZE);
+  const backRight = isoToScreen(GRID_SIZE, 0);
   const wallH = 45 * s;
 
   ctx.fillStyle = '#2a3548';
@@ -1858,7 +1858,7 @@ function draw() {
   drawGlassPartition(5, 5, 8, 5);
   // Circuit front wall with door gap at gx 10.5–12
   drawGlassPartition(8, 5, 10.5, 5);
-  drawGlassPartition(12, 5, 15, 5);
+  drawGlassPartition(12, 5, 16, 5);
   // Center divider (shared wall at gx=8)
   drawGlassPartition(8, 0, 8, 5);
 
