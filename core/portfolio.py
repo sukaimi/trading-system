@@ -178,6 +178,7 @@ class PortfolioState:
                     "current_price": current_price,
                     "quantity": quantity,
                     "equity": equity,
+                    "action_needed": "manual_review",
                 })
 
     def record_trade(self, pnl: float) -> None:

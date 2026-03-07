@@ -82,6 +82,9 @@ class TradingPipeline:
         except Exception as e:
             log.warning("Could not load risk_params.json: %s", e)
 
+        # Backfill any legacy positions missing fields
+        self._backfill_legacy_positions()
+
     def run_chart_scan(self) -> list[SignalAlert]:
         """Run a technical chart scan and process any signals found.
 
@@ -871,6 +874,57 @@ class TradingPipeline:
             )
         except Exception as e:
             log.error("Broker health check failed: %s", e)
+
+    def _backfill_legacy_positions(self) -> None:
+        """Patch legacy positions missing timestamp_open, take_profit_price, or MAE/MFE.
+
+        Positions opened before the acceleration commit (100e1f4) lack these
+        fields, which breaks take-profit checks, 72h time exits, and MAE/MFE
+        tracking. This runs once at startup and persists the patched state.
+        """
+        positions = self._portfolio.open_positions
+        patched = 0
+
+        for pos in positions:
+            changed = False
+
+            # Backfill timestamp_open — use current time (conservative: starts 72h clock now)
+            if not pos.get("timestamp_open"):
+                pos["timestamp_open"] = datetime.now(timezone.utc).isoformat()
+                changed = True
+
+            # Backfill take_profit_price from entry price + config default
+            if pos.get("take_profit_price") is None:
+                entry = pos.get("entry_price", 0)
+                direction = pos.get("direction", "long")
+                tp_pct = self._risk_params.get("default_take_profit_pct", 5.0) / 100.0
+                if entry > 0 and tp_pct > 0:
+                    if direction == "long":
+                        pos["take_profit_price"] = round(entry * (1 + tp_pct), 2)
+                    else:
+                        pos["take_profit_price"] = round(entry * (1 - tp_pct), 2)
+                    changed = True
+
+            # Backfill MAE/MFE
+            if "mae_pct" not in pos:
+                pnl_pct = pos.get("unrealized_pnl_pct", 0.0)
+                pos["mae_pct"] = min(pnl_pct, 0.0)
+                changed = True
+            if "mfe_pct" not in pos:
+                pnl_pct = pos.get("unrealized_pnl_pct", 0.0)
+                pos["mfe_pct"] = max(pnl_pct, 0.0)
+                changed = True
+
+            if changed:
+                patched += 1
+                log.info(
+                    "Backfilled legacy position: %s (TP=$%s, timestamp=%s)",
+                    pos.get("asset"), pos.get("take_profit_price"), pos.get("timestamp_open"),
+                )
+
+        if patched:
+            log.info("Backfilled %d legacy positions — persisting", patched)
+            self._portfolio.persist()
 
     def recalculate_equity(self) -> None:
         """Recalculate portfolio equity using live market prices."""
