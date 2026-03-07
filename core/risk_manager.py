@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import os
+import time
 from typing import Any
 
 from core.logger import setup_logger
@@ -33,6 +34,11 @@ class RiskManager:
         self.max_correlation: float = config["max_correlation"]
         self.stop_loss_atr_mult: float = config["stop_loss_atr_mult"]
         self.base_risk_per_trade_pct: float = config.get("base_risk_per_trade_pct", 2.0)
+        self.max_portfolio_avg_correlation: float = config.get("max_portfolio_avg_correlation", 0.6)
+
+        # Correlation cache: {frozenset(assets): {"matrix": ..., "timestamp": ...}}
+        self._correlation_cache: dict[str, Any] = {}
+        self._correlation_ttl: int = 3600  # 1 hour
 
     @staticmethod
     def _load_config() -> dict[str, Any]:
@@ -118,8 +124,104 @@ class RiskManager:
                     None,
                 )
 
+        # Check 8: Correlation limit — reject if too correlated with existing positions
+        corr_ok, corr_reason = self._check_correlation(asset, open_positions)
+        if not corr_ok:
+            return False, corr_reason, None
+
         log.info("Order validated: %s %s", execution_order.get("direction"), asset)
         return True, "APPROVED", execution_order
+
+    def _check_correlation(
+        self, asset: str, open_positions: list[dict[str, Any]]
+    ) -> tuple[bool, str]:
+        """Check if new asset is too correlated with existing portfolio.
+
+        Uses cached correlation data (1-hour TTL) to avoid re-fetching prices
+        on every validate_order call. Gracefully approves if price data is
+        unavailable.
+
+        Returns:
+            (ok, reason) — ok=True means the order passes the correlation check.
+        """
+        if not open_positions:
+            return True, ""
+
+        held_assets = [pos.get("asset", "") for pos in open_positions if pos.get("asset")]
+        if not held_assets:
+            return True, ""
+
+        try:
+            from tools.correlation import CorrelationAnalyzer
+            from tools.market_data import MarketDataFetcher
+
+            # Build cache key from sorted asset list (candidate + held)
+            all_assets = sorted(set(held_assets + [asset]))
+            cache_key = ",".join(all_assets)
+
+            now = time.time()
+            cached = self._correlation_cache.get(cache_key)
+            price_series: dict[str, list[float]] = {}
+
+            if cached and (now - cached["timestamp"]) < self._correlation_ttl:
+                price_series = cached["series"]
+            else:
+                # Fetch fresh price data
+                mdf = MarketDataFetcher()
+                for sym in all_assets:
+                    try:
+                        ohlcv = mdf.get_ohlcv(sym, period="1mo", interval="1d")
+                        price_series[sym] = [bar["close"] for bar in ohlcv if "close" in bar]
+                    except Exception as e:
+                        log.warning("Correlation price fetch failed for %s: %s", sym, e)
+                        price_series[sym] = []
+
+                self._correlation_cache[cache_key] = {
+                    "series": price_series,
+                    "timestamp": now,
+                }
+
+            analyzer = CorrelationAnalyzer()
+            candidate_series = price_series.get(asset, [])
+
+            if len(candidate_series) < 5:
+                # Not enough data — approve by default
+                log.info("Correlation check: insufficient data for %s — approved", asset)
+                return True, ""
+
+            # Check pairwise correlation with each held asset
+            all_correlations: list[float] = []
+            for held in held_assets:
+                held_series = price_series.get(held, [])
+                if len(held_series) < 5:
+                    continue
+                corr = analyzer.pairwise_correlation(candidate_series, held_series)
+                abs_corr = abs(corr)
+                all_correlations.append(abs_corr)
+
+                if abs_corr > self.max_correlation:
+                    return (
+                        False,
+                        f"Correlation limit: {asset} vs {held} correlation {corr:.2f} "
+                        f"exceeds max {self.max_correlation}",
+                    )
+
+            # Portfolio-level average correlation warning (don't reject)
+            if all_correlations:
+                avg_corr = sum(all_correlations) / len(all_correlations)
+                if avg_corr > self.max_portfolio_avg_correlation:
+                    log.warning(
+                        "CORRELATION WARNING: portfolio avg correlation with %s is %.2f "
+                        "(threshold %.2f) — order approved but elevated risk",
+                        asset, avg_corr, self.max_portfolio_avg_correlation,
+                    )
+
+        except ImportError:
+            log.warning("Correlation check skipped — tools not available")
+        except Exception as e:
+            log.warning("Correlation check failed — approving by default: %s", e)
+
+        return True, ""
 
     def calculate_position_size(
         self,

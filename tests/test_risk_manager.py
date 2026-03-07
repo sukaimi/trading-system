@@ -1,4 +1,6 @@
-"""Tests for RiskManager — all 6 validation checks + position sizing."""
+"""Tests for RiskManager — all 7 validation checks + position sizing."""
+
+from unittest.mock import patch
 
 import pytest
 
@@ -6,9 +8,10 @@ from core.risk_manager import RiskManager
 
 
 class TestValidateOrder:
-    """Test all 6 risk checks in validate_order."""
+    """Test all 7 risk checks in validate_order."""
 
-    def test_valid_order_approved(self, risk_config, sample_execution_order, sample_portfolio_state):
+    @patch.object(RiskManager, "_check_correlation", return_value=(True, ""))
+    def test_valid_order_approved(self, mock_corr, risk_config, sample_execution_order, sample_portfolio_state):
         rm = RiskManager(risk_config)
         approved, reason, order = rm.validate_order(sample_execution_order, sample_portfolio_state)
         assert approved is True

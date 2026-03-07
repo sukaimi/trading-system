@@ -38,6 +38,8 @@ from core.schemas import (
     TradeThesis,
     Verdict,
 )
+from core.earnings_calendar import EarningsCalendar
+from core.regime_classifier import RegimeClassifier
 from tools.correlation import CorrelationAnalyzer
 from tools.market_data import MarketDataFetcher
 from tools.telegram_bot import TelegramNotifier
@@ -76,6 +78,8 @@ class TradingPipeline:
         )
         self._phantom = PhantomTracker()
         self._signal_tracker = SignalAccuracyTracker()
+        self._regime_classifier = RegimeClassifier(market_data_fetcher=MarketDataFetcher())
+        self._earnings_cal = EarningsCalendar()
 
         # Load risk params for auto-recovery cooldown + default stop-loss
         self._risk_params: dict[str, Any] = {}
@@ -234,6 +238,14 @@ class TradingPipeline:
                 "thesis": None,
                 "verdict": None,
             }
+
+        # Log earnings context (informational only — don't block)
+        earnings_days = self._earnings_cal.days_until_earnings(signal.asset)
+        if earnings_days is not None:
+            log.info(
+                "EARNINGS CONTEXT: %s has earnings in %d days",
+                signal.asset, earnings_days,
+            )
 
         # Step 1: Market Analyst generates thesis
         try:
@@ -551,12 +563,25 @@ class TradingPipeline:
             if favorable_move_pct < activation_pct:
                 continue
 
-            # Calculate trail distance: max(ATR-based, flat %)
+            # Classify regime for adaptive trail distance
+            try:
+                regime_info = self._regime_classifier.classify(asset)
+                regime = regime_info.get("regime", "RANGING")
+                pos["regime"] = regime
+            except Exception as e:
+                log.debug("Regime classification failed for %s: %s", asset, e)
+                regime = "RANGING"
+
+            regime_mult = self._regime_classifier.get_trailing_multiplier(
+                regime, self._risk_params
+            )
+
+            # Calculate trail distance: max(ATR-based, flat %) * regime multiplier
             atr = pos.get("supporting_data", {}).get("atr_14") if isinstance(pos.get("supporting_data"), dict) else None
             if atr and atr > 0:
-                trail_distance = max(atr * atr_mult, current_price * distance_pct)
+                trail_distance = max(atr * atr_mult, current_price * distance_pct) * regime_mult
             else:
-                trail_distance = current_price * distance_pct
+                trail_distance = current_price * distance_pct * regime_mult
 
             # Calculate new stop price
             if direction == "long":
@@ -582,8 +607,8 @@ class TradingPipeline:
             pos["stop_loss_price"] = new_stop
 
             log.info(
-                "TRAILING STOP updated: %s %s (trade %s) — stop moved $%.2f → $%.2f (price $%.2f, trail $%.2f)",
-                direction.upper(), asset, trade_id, old_stop, new_stop, current_price, trail_distance,
+                "TRAILING STOP [%s] %s %s (trade %s) stop $%.2f->$%.2f (price $%.2f trail $%.2f mult=%.1f)",
+                regime, direction.upper(), asset, trade_id, old_stop, new_stop, current_price, trail_distance, regime_mult,
             )
 
             event_bus.emit("trailing_stop", "updated", {
@@ -595,6 +620,8 @@ class TradingPipeline:
                 "current_price": current_price,
                 "trail_distance": round(trail_distance, 2),
                 "trailing_stop_active": True,
+                "regime": regime,
+                "regime_multiplier": regime_mult,
             })
 
             # Send Telegram alert on first activation
@@ -1526,6 +1553,17 @@ class TradingPipeline:
                 consecutive_losses, position_pct,
             )
 
+        # ── Earnings proximity reduction ──────────────────────────────────
+        earnings_days = self._risk_params.get("earnings_proximity_days", 3)
+        earnings_reduction = self._risk_params.get("earnings_position_reduction", 0.5)
+        if self._earnings_cal.has_earnings_soon(thesis.asset, days=earnings_days):
+            position_pct *= earnings_reduction
+            days_until = self._earnings_cal.days_until_earnings(thesis.asset)
+            log.warning(
+                "EARNINGS PROXIMITY: %s has earnings in %s days — position halved to %.1f%%",
+                thesis.asset, days_until, position_pct,
+            )
+
         # Calculate stop-loss from invalidation level, or default to 5% from price
         stop_loss = None
         if thesis.invalidation_level:
@@ -1547,25 +1585,37 @@ class TradingPipeline:
             except Exception:
                 pass
 
+        # Classify regime for adaptive stop sizing
+        try:
+            regime_info = self._regime_classifier.classify(thesis.asset)
+            regime = regime_info.get("regime", "RANGING")
+        except Exception:
+            regime = "RANGING"
+            regime_info = {"regime": regime, "confidence": 0.5}
+
+        regime_stop_mult = self._regime_classifier.get_initial_stop_multiplier(
+            regime, self._risk_params
+        )
+
         # Default stop-loss if none provided: use ATR-based stop, fall back to flat %
         atr = thesis.supporting_data.get("atr_14")
         if stop_loss is None and current_price > 0:
-            sl_atr_mult = self._risk_params.get("stop_loss_atr_mult", 2.0)
+            sl_atr_mult = self._risk_params.get("stop_loss_atr_mult", 2.0) * regime_stop_mult
             if atr and atr > 0:
-                # ATR-based dynamic stop
+                # ATR-based dynamic stop (regime-adjusted)
                 if thesis.direction.value == "long":
                     stop_loss = round(current_price - (atr * sl_atr_mult), 2)
                 else:
                     stop_loss = round(current_price + (atr * sl_atr_mult), 2)
-                log.info("ATR stop-loss set at $%.2f (ATR=%.2f, mult=%.1f from $%.2f)", stop_loss, atr, sl_atr_mult, current_price)
+                log.info("ATR stop [%s] at $%.2f (ATR=%.2f, mult=%.1f from $%.2f)", regime, stop_loss, atr, sl_atr_mult, current_price)
             else:
-                # Flat % fallback when ATR is unavailable
-                sl_pct = self._risk_params.get("default_stop_loss_pct", 3.0) / 100.0
+                # Flat % fallback when ATR is unavailable (regime-adjusted)
+                sl_pct = self._risk_params.get("default_stop_loss_pct", 3.0) / 100.0 * regime_stop_mult
                 if thesis.direction.value == "long":
                     stop_loss = round(current_price * (1 - sl_pct), 2)
                 else:
                     stop_loss = round(current_price * (1 + sl_pct), 2)
-                log.info("Default stop-loss set at $%.2f (%.0f%% from $%.2f)", stop_loss, sl_pct * 100, current_price)
+                log.info("Default stop [%s] at $%.2f (%.1f%% from $%.2f)", regime, stop_loss, sl_pct * 100, current_price)
 
         # Calculate take-profit from risk/reward ratio + stop-loss distance
         take_profit = None
@@ -1631,4 +1681,7 @@ class TradingPipeline:
             "stop_loss": stop_loss,
             "take_profit": take_profit,
             "position_size_pct": position_pct,
+            "regime": regime,
+            "regime_confidence": regime_info.get("confidence", 0.5),
+            "regime_stop_multiplier": regime_stop_mult,
         }

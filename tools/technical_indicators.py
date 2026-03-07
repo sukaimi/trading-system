@@ -157,6 +157,114 @@ class TechnicalIndicators:
             return 0.0
         return float(np.mean(prices[-period:]))
 
+    def adx(
+        self,
+        highs: list[float],
+        lows: list[float],
+        closes: list[float],
+        period: int = 14,
+    ) -> float:
+        """Calculate Average Directional Index using Wilder's smoothing.
+
+        ADX measures trend strength regardless of direction.
+        > 25 = trending, < 20 = ranging/weak trend.
+
+        Args:
+            highs/lows/closes: OHLC data, same length, oldest first.
+            period: ADX lookback (default 14).
+
+        Returns:
+            ADX value 0-100. Returns 0.0 if insufficient data.
+        """
+        n = min(len(highs), len(lows), len(closes))
+        if n < period * 2 + 1:
+            return 0.0
+
+        h = np.array(highs[:n], dtype=float)
+        l = np.array(lows[:n], dtype=float)
+        c = np.array(closes[:n], dtype=float)
+
+        # Directional movement
+        up_move = h[1:] - h[:-1]
+        down_move = l[:-1] - l[1:]
+
+        plus_dm = np.where((up_move > down_move) & (up_move > 0), up_move, 0.0)
+        minus_dm = np.where((down_move > up_move) & (down_move > 0), down_move, 0.0)
+
+        # True Range
+        tr = np.maximum(
+            h[1:] - l[1:],
+            np.maximum(
+                np.abs(h[1:] - c[:-1]),
+                np.abs(l[1:] - c[:-1]),
+            ),
+        )
+
+        if len(tr) < period:
+            return 0.0
+
+        # Wilder's smoothing for TR, +DM, -DM
+        atr_val = float(np.sum(tr[:period]))
+        plus_dm_smooth = float(np.sum(plus_dm[:period]))
+        minus_dm_smooth = float(np.sum(minus_dm[:period]))
+
+        # First DI values
+        plus_di_series = []
+        minus_di_series = []
+
+        if atr_val > 0:
+            plus_di_series.append(100.0 * plus_dm_smooth / atr_val)
+            minus_di_series.append(100.0 * minus_dm_smooth / atr_val)
+        else:
+            plus_di_series.append(0.0)
+            minus_di_series.append(0.0)
+
+        for i in range(period, len(tr)):
+            atr_val = atr_val - (atr_val / period) + tr[i]
+            plus_dm_smooth = plus_dm_smooth - (plus_dm_smooth / period) + plus_dm[i]
+            minus_dm_smooth = minus_dm_smooth - (minus_dm_smooth / period) + minus_dm[i]
+
+            if atr_val > 0:
+                plus_di_series.append(100.0 * plus_dm_smooth / atr_val)
+                minus_di_series.append(100.0 * minus_dm_smooth / atr_val)
+            else:
+                plus_di_series.append(0.0)
+                minus_di_series.append(0.0)
+
+        # Calculate DX from DI values
+        dx_series = []
+        for pdi, mdi in zip(plus_di_series, minus_di_series):
+            di_sum = pdi + mdi
+            if di_sum > 0:
+                dx_series.append(100.0 * abs(pdi - mdi) / di_sum)
+            else:
+                dx_series.append(0.0)
+
+        if len(dx_series) < period:
+            return 0.0
+
+        # ADX = Wilder's smoothed DX
+        adx_val = float(np.mean(dx_series[:period]))
+        for i in range(period, len(dx_series)):
+            adx_val = (adx_val * (period - 1) + dx_series[i]) / period
+
+        return float(adx_val)
+
+    def sma_series(self, prices: list[float], period: int) -> list[float]:
+        """Calculate SMA series for the given period.
+
+        Returns list of SMA values, one per bar starting from index period-1.
+        Returns empty list if insufficient data.
+        """
+        if len(prices) < period or period <= 0:
+            return []
+        arr = np.array(prices, dtype=float)
+        # Cumulative sum trick for efficient rolling mean
+        cumsum = np.cumsum(arr)
+        cumsum = np.insert(cumsum, 0, 0)
+        sma_vals = (cumsum[period:] - cumsum[:-period]) / period
+        return [float(v) for v in sma_vals]
+
     def _ema(self, prices: list[float], period: int) -> list[float]:
         """Calculate Exponential Moving Average series.
 

@@ -7,6 +7,7 @@ import pytest
 from core.llm_client import LLMClient
 from core.pipeline import TradingPipeline
 from core.portfolio import PortfolioState
+from core.regime_classifier import RegimeClassifier
 from core.risk_manager import RiskManager
 
 
@@ -19,6 +20,23 @@ def trailing_risk_config(risk_config):
         "trailing_stop_distance_pct": 1.5,
         "trailing_stop_atr_mult": 1.0,
     }
+
+
+def _make_neutral_regime_classifier():
+    """Create a regime classifier that always returns LOW_VOLATILITY (mult=1.0)."""
+    mock_rc = MagicMock(spec=RegimeClassifier)
+    mock_rc.classify.return_value = {
+        "regime": "LOW_VOLATILITY",
+        "confidence": 0.8,
+        "adx": 15.0,
+        "atr_ratio": 0.5,
+        "bollinger_bandwidth": 0.02,
+        "sma_slope": 0.0,
+        "rsi": 50.0,
+    }
+    mock_rc.get_trailing_multiplier.return_value = 1.0
+    mock_rc.get_initial_stop_multiplier.return_value = 1.0
+    return mock_rc
 
 
 @pytest.fixture
@@ -37,6 +55,8 @@ def pipeline(trailing_risk_config):
     )
     # Override _risk_params so the method reads our test config
     p._risk_params = trailing_risk_config
+    # Use a neutral regime classifier (mult=1.0) so trail math matches pre-regime tests
+    p._regime_classifier = _make_neutral_regime_classifier()
     return p
 
 

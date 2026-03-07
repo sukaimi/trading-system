@@ -177,6 +177,23 @@ async def get_signal_accuracy() -> dict[str, Any]:
     return {"total_signals": 0, "executed": 0, "closed": 0, "wins": 0, "losses": 0, "win_rate": 0.0, "recent": []}
 
 
+@app.get("/api/earnings")
+async def get_earnings() -> list[dict[str, Any]]:
+    from core.earnings_calendar import EarningsCalendar
+    cal = EarningsCalendar()
+    return cal.upcoming_earnings(days=30)
+
+
+@app.get("/api/regime")
+async def get_regime() -> dict[str, Any]:
+    """Return current market regime classification for all tradeable assets."""
+    try:
+        return await asyncio.to_thread(_fetch_regime)
+    except Exception as e:
+        log.warning("Regime fetch failed: %s", e)
+        return {"per_asset": {}, "dominant_regime": "RANGING", "regime_agreement": 0.0}
+
+
 @app.get("/api/events/recent")
 async def get_recent_events() -> list[dict[str, Any]]:
     return event_bus.get_recent(50)
@@ -264,6 +281,18 @@ def _read_json(path: str, default: Any) -> Any:
         except (json.JSONDecodeError, OSError):
             pass
     return default
+
+
+def _fetch_regime() -> dict[str, Any]:
+    from core.regime_classifier import RegimeClassifier
+    from tools.market_data import MarketDataFetcher
+    try:
+        from core.asset_registry import get_tradeable_assets
+        symbols = get_tradeable_assets()
+    except Exception:
+        symbols = ["BTC", "ETH", "GLDM", "SLV"]
+    classifier = RegimeClassifier(market_data_fetcher=MarketDataFetcher())
+    return classifier.classify_portfolio(symbols)
 
 
 def _fetch_price_history() -> dict[str, Any]:
