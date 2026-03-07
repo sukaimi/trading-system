@@ -36,15 +36,16 @@ Emergency: CircuitBreaker → halt trading → auto-recovery after 6h cooldown
 ```
 trading-system/
 ├── agents/          # 6 agent modules
-├── core/            # 18 core modules (schemas, llm_client, pipeline, portfolio, risk_manager,
+├── core/            # 21 core modules (schemas, llm_client, pipeline, portfolio, risk_manager,
 │                    #   executor, routing_executor, coinbase_executor, alpaca_executor,
 │                    #   paper_executor, heartbeat, logger, self_optimizer, cost_tracker,
-│                    #   event_bus, ga4_tracker, asset_registry, phantom_tracker)
+│                    #   event_bus, ga4_tracker, asset_registry, phantom_tracker,
+│                    #   signal_tracker, regime_classifier, earnings_calendar)
 ├── tools/           # 5 tools (news_fetcher, market_data, technical_indicators, correlation, telegram_bot)
 ├── dashboard/       # FastAPI dashboard server + static files (index.html, agent-floor.html, lotus-creature.js)
 ├── config/          # Dynamic params JSON (updated weekly by SelfOptimizer)
 ├── data/            # Persisted state, trade journal, logs, weekly reviews (gitignored)
-├── tests/           # 26 test files, 302 tests (pytest)
+├── tests/           # 31 test files, 409 tests (pytest)
 ├── docs/            # PRD, Lotus spec
 ├── main.py          # Entry point — 12-task scheduler + dashboard
 └── requirements.txt
@@ -52,7 +53,10 @@ trading-system/
 
 ## Key Files
 - `main.py` — Entry point, scheduler, executor selection (paper/alpaca/live/ibkr)
-- `core/pipeline.py` — Signal-to-execution orchestration + `check_stop_losses()` + `check_holding_periods()`
+- `core/pipeline.py` — Signal-to-execution orchestration + `update_trailing_stops()` + `check_stop_losses()` + `check_holding_periods()`
+- `core/regime_classifier.py` — Market regime detection (trending/ranging/volatile) using ADX, ATR, Bollinger, RSI
+- `core/earnings_calendar.py` — Earnings date tracking, position reduction near earnings
+- `core/signal_tracker.py` — Signal accuracy tracking (signal → trade → outcome correlation)
 - `core/alpaca_executor.py` — Alpaca paper/live trading executor
 - `core/coinbase_executor.py` — Coinbase Advanced Trade API crypto executor (BTC, ETH)
 - `core/routing_executor.py` — Smart routing: crypto→Coinbase, stocks/ETFs→Alpaca (EXECUTOR_MODE=live)
@@ -140,11 +144,13 @@ Optional: DASHBOARD_PORT (default 8080), DASHBOARD_ALLOWED_ORIGINS, GA4_MEASUREM
 - [x] **Phase 4: Paper Trading** — Alpaca executor, stop-loss monitor, dashboard, Lotus creature, VPS deployment
 - [x] **Agent Trading Floor** — Isometric visualization with 9 agents + 4 NPC interns, live data from APIs + WebSocket
 
-### Current Phase: Paper Trading + Acceleration
+### Current Phase: Paper Trading + Agent Upskilling
 - Running on VPS with Alpaca paper account
 - Monitoring trades, agent decisions, costs
 - Homepage: Agent Trading Floor (isometric, live market data, real-time agent animations)
 - Acceleration features: 15-min news scan, 4x chart scan, 72h forced exit, MAE/MFE tracking, sector concentration, take-profit floor (5%), position weight drift monitoring
+- **Tier 1 upgrades**: ATR dynamic stops/TP, ATR position sizing, pre-LLM filter, loss throttling, phantom→DA feedback, signal accuracy→NewsScout feedback, correlation→DA feedback
+- **Tier 2 upgrades**: Trailing stops, regime classifier (5 regimes), adaptive stops, correlation-based position limits, earnings calendar
 
 ### Pending
 - [ ] **Phase 5: Optimization** — Analyze paper trading data, tune parameters (needs 10-20+ trades)
