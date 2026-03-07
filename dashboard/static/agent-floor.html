@@ -147,6 +147,47 @@ const EVENT_TO_ANIMATION = {
   'circuit_breaker:triggered':           { agent: 'Circuit',   target: 'Strategist', pause: 3.0, label: 'CIRCUIT BREAKER!' },
 };
 
+// Intern errand system: each intern has a route of agent desks to visit
+function createErrand(internName, route) {
+  return { intern: internName, route, step: 0, active: false };
+}
+
+const errands = {
+  jrAnalyst:  createErrand('Trader1', ['NewsScout', 'Analyst']),                    // Research → Sr Analyst
+  jrTrader:   createErrand('Trader2', ['Executor', 'Journal']),                     // Hd of Trading → Auditor
+  dataEntry:  createErrand('Trader3', ['Risk', 'Devil', 'NewsScout']),              // Risk Mgr → Risk Analyst → Research
+  compliance: createErrand('Trader4', ['Strategist', 'Devil', 'Executor', 'Circuit']), // Patrol: CIO → Risk Analyst → Hd of Trading → CRO
+};
+
+function triggerErrand(errand) {
+  if (errand.active) return;
+  errand.active = true;
+  errand.step = 0;
+  advanceErrand(errand);
+}
+
+function advanceErrand(errand) {
+  if (errand.step >= errand.route.length) {
+    errand.active = false;
+    return;
+  }
+  const targetName = errand.route[errand.step];
+  const target = agents.find(a => a.name === targetName);
+  if (!target) { errand.active = false; return; }
+  const tgx = target.visitorGx != null ? target.visitorGx : target.homeGx;
+  const tgy = target.visitorGy != null ? target.visitorGy : target.homeGy;
+  if (sendAgentTo(errand.intern, tgx, tgy, 1.5)) {
+    errand.step++;
+  } else {
+    errand.active = false;
+  }
+}
+
+function triggerJrAnalystErrand() { triggerErrand(errands.jrAnalyst); }
+function triggerJrTraderErrand() { triggerErrand(errands.jrTrader); }
+function triggerDataEntryErrand() { triggerErrand(errands.dataEntry); }
+function triggerCompliancePatrol() { triggerErrand(errands.compliance); }
+
 let liveMode = false;
 let lastLiveEventTime = 0;
 const LIVE_MODE_TIMEOUT = 30000; // revert to demo after 30s of no events
@@ -156,6 +197,9 @@ function processLiveEvents() {
     const event = _eventQueue.shift();
     const key = `${event.category}:${event.event_type}`;
     const anim = EVENT_TO_ANIMATION[key];
+    if (key === 'pipeline:news_scan_complete') triggerJrAnalystErrand();
+    if (key === 'pipeline:trade_executed') triggerJrTraderErrand();
+    if (key === 'pipeline:risk_check') triggerCompliancePatrol();
     if (anim) {
       liveMode = true;
       lastLiveEventTime = Date.now();
@@ -940,7 +984,7 @@ function drawWaterCooler(gx, gy) {
 }
 
 // ── Draw a Roblox-style character ──────────────────────────────
-function drawCharacter(gx, gy, colors, accessory, legPhase, bobY, seated) {
+function drawCharacter(gx, gy, colors, accessory, legPhase, bobY, seated, female) {
   const { s } = getLayout();
   const { x, y } = isoToScreen(gx, gy);
   const baseY = y + (bobY || 0);
@@ -1025,9 +1069,19 @@ function drawCharacter(gx, gy, colors, accessory, legPhase, bobY, seated) {
   // Hair
   if (colors.hair) {
     ctx.fillStyle = colors.hair;
-    ctx.fillRect(x - headW / 2, headTop, headW, 5 * s);
-    ctx.fillRect(x - headW / 2, headTop, 2 * s, 8 * s);
-    ctx.fillRect(x + headW / 2 - 2 * s, headTop, 2 * s, 7 * s);
+    if (female) {
+      // Long flowing hair
+      ctx.fillRect(x - headW / 2, headTop, headW, 5 * s);
+      ctx.fillRect(x - headW / 2 - 1 * s, headTop, 2 * s, headH + 10 * s);
+      ctx.fillRect(x + headW / 2 - 1 * s, headTop, 2 * s, headH + 10 * s);
+      // Slight wave on left
+      ctx.fillRect(x - headW / 2 - 2 * s, headTop + 8 * s, 2 * s, 6 * s);
+      ctx.fillRect(x + headW / 2, headTop + 7 * s, 2 * s, 6 * s);
+    } else {
+      ctx.fillRect(x - headW / 2, headTop, headW, 5 * s);
+      ctx.fillRect(x - headW / 2, headTop, 2 * s, 8 * s);
+      ctx.fillRect(x + headW / 2 - 2 * s, headTop, 2 * s, 7 * s);
+    }
   }
 
   // Face
@@ -1054,8 +1108,18 @@ function drawCharacter(gx, gy, colors, accessory, legPhase, bobY, seated) {
   }
   ctx.fillStyle = shadeColor(colors.skin, -15);
   ctx.fillRect(x - 0.5 * s, headTop + 10 * s, 1 * s, 2 * s);
-  ctx.fillStyle = '#cc8877';
-  ctx.fillRect(x - 2 * s, headTop + 13 * s, 4 * s, 1 * s);
+  if (female) {
+    // Red lips
+    ctx.fillStyle = '#e03050';
+    ctx.fillRect(x - 2.5 * s, headTop + 12.5 * s, 5 * s, 1.5 * s);
+    // Eyelashes
+    ctx.fillStyle = '#1a0a0a';
+    ctx.fillRect(x - 7 * s, headTop + 6.5 * s, 5 * s, 0.5 * s);
+    ctx.fillRect(x + 2 * s, headTop + 6.5 * s, 5 * s, 0.5 * s);
+  } else {
+    ctx.fillStyle = '#cc8877';
+    ctx.fillRect(x - 2 * s, headTop + 13 * s, 4 * s, 1 * s);
+  }
 
   // Hat
   if (colors.hat) {
@@ -1273,8 +1337,8 @@ const agents = [
     colors: { body: '#7a8fc2', skin: '#f0c8a0', legs: '#2a3a5a', hair: '#4a3520', hat: null } },
   { name: 'Trader3', gx: 8,  gy: 12.0, npc: true, accessory: null,
     colors: { body: '#c29a6b', skin: '#d4a88c', legs: '#5a4a3a', hair: '#1a1a2e', hat: null } },
-  { name: 'Trader4', gx: 11, gy: 9.0, npc: true, accessory: null,
-    colors: { body: '#9b7abf', skin: '#f0c8a0', legs: '#3a2a5a', hair: '#1a0a0a', hat: null } },
+  { name: 'Trader4', gx: 11, gy: 9.0, npc: true, accessory: null, female: true,
+    colors: { body: '#e05080', skin: '#f5d0b0', legs: '#1a1a2e', hair: '#2a0a0a', hat: null } },
 ];
 
 // ── Initialize agent runtime state ─────────────────────────────
@@ -1287,7 +1351,7 @@ agents.forEach(a => {
   a.walkPath = [];
   a.walkIndex = 0;
   a.walkProgress = 0;
-  a.walkSpeed = 3.0;       // tiles per second
+  a.walkSpeed = (a.name === 'Trader1' || a.name === 'Trader2') ? 4.5 : 3.0;
   a.legPhase = 0;
   a.idleBob = 0;
   a.interactTimer = 0;
@@ -1353,8 +1417,26 @@ function calcWalkPath(fromGx, fromGy, toGx, toGy) {
     const insideGx = fromInOffice ? fromGx : toGx;
     const doorGx = (insideGx < DIVIDER_GX) ? STRAT_DOOR_GX : CIRCUIT_DOOR_GX;
 
-    if (Math.abs(fromGx - doorGx) > 0.1) path.push({ gx: doorGx, gy: fromGy });
-    path.push({ gx: doorGx, gy: toGy });
+    // Check if vertical segment through door hits desks — detour via corridor
+    if (verticalHitsDesk(doorGx, fromGy, toGy)) {
+      const safeCorr = nearestCorridor(doorGx, fromGy, toGy);
+      if (fromInOffice) {
+        // Leaving office: walk to door, through wall, then detour on open floor
+        if (Math.abs(fromGx - doorGx) > 0.1) path.push({ gx: doorGx, gy: fromGy });
+        path.push({ gx: doorGx, gy: WALL_GY });
+        if (Math.abs(doorGx - safeCorr) > 0.1) path.push({ gx: safeCorr, gy: WALL_GY });
+        path.push({ gx: safeCorr, gy: toGy });
+      } else {
+        // Entering office: detour via corridor on open floor, then through door
+        if (Math.abs(fromGx - safeCorr) > 0.1) path.push({ gx: safeCorr, gy: fromGy });
+        path.push({ gx: safeCorr, gy: WALL_GY });
+        path.push({ gx: doorGx, gy: WALL_GY });
+        path.push({ gx: doorGx, gy: toGy });
+      }
+    } else {
+      if (Math.abs(fromGx - doorGx) > 0.1) path.push({ gx: doorGx, gy: fromGy });
+      path.push({ gx: doorGx, gy: toGy });
+    }
     if (Math.abs(toGx - doorGx) > 0.1) path.push({ gx: toGx, gy: toGy });
 
   } else if (fromInOffice && toInOffice &&
@@ -1386,7 +1468,8 @@ function calcWalkPath(fromGx, fromGy, toGx, toGy) {
 
 function sendAgentTo(agentName, targetGx, targetGy, pauseDuration) {
   const agent = agents.find(a => a.name === agentName);
-  if (!agent || agent.npc || agent.state !== 'idle') return false;
+  if (!agent || agent.state !== 'idle') return false;
+  if (agent.npc && !['Trader1','Trader2','Trader3','Trader4'].includes(agent.name)) return false;  // allow intern errands
   agent.state = 'walking';
   agent.walkPath = calcWalkPath(agent.renderGx, agent.renderGy, targetGx, targetGy);
   agent.walkIndex = 0;
@@ -1407,6 +1490,14 @@ function updateAgentWalk(agent, dt) {
     agent.legPhase = 0;
     agent.interactTimer -= dt;
     if (agent.interactTimer <= 0) {
+      // Intern errands: advance to next stop instead of walking home
+      for (const errand of Object.values(errands)) {
+        if (agent.name === errand.intern && errand.active) {
+          advanceErrand(errand);
+          if (errand.active) return; // sent to next stop
+          break;
+        }
+      }
       agent.state = 'walking_back';
       agent.walkPath = calcWalkPath(agent.renderGx, agent.renderGy, agent.homeGx, agent.homeGy);
       agent.walkIndex = 0;
@@ -1424,7 +1515,7 @@ function updateAgentWalk(agent, dt) {
       agent.state = 'idle';
       agent.renderGx = agent.homeGx;
       agent.renderGy = agent.homeGy;
-      agent.walkSpeed = 3.0; // reset from rush speed
+      agent.walkSpeed = (agent.name === 'Trader1' || agent.name === 'Trader2') ? 4.5 : 3.0;
     }
     agent.legPhase = 0;
     return;
@@ -1513,13 +1604,13 @@ function updatePantryVisits(dt) {
 
 // ── Demo sequence ──────────────────────────────────────────────
 const DEMO_STEPS = [
-  { agent: 'NewsScout', target: 'Analyst',    pause: 1.5, label: 'Delivering news briefing' },
+  { agent: 'NewsScout', target: 'Analyst',    pause: 1.5, label: 'Delivering news briefing', triggerJrAnalyst: true },
   { agent: 'Analyst',   target: 'Chart',      pause: 1.8, label: 'Checking technicals' },
   { agent: 'Analyst',   target: 'Devil',      pause: 2.0, label: "Devil's advocate review" },
   { agent: 'Analyst',   target: 'Risk',       pause: 1.5, label: 'Requesting risk check' },
-  { agent: 'Risk',      target: 'Executor',   pause: 1.0, label: 'Approving trade' },
-  { agent: 'Executor',  target: 'Journal',    pause: 1.2, label: 'Logging trade' },
-  { wait: 4.0 },
+  { agent: 'Risk',      target: 'Executor',   pause: 1.0, label: 'Approving trade', triggerCompliance: true },
+  { agent: 'Executor',  target: 'Journal',    pause: 1.2, label: 'Logging trade', triggerJrTrader: true },
+  { wait: 4.0, triggerDataEntry: true },
   { agent: 'Analyst',   target: 'Strategist', pause: 2.0, label: 'Strategy consultation' },
   { wait: 3.0 },
 ];
@@ -1541,6 +1632,7 @@ function updateDemo(dt) {
       demo.waitTimer = step.wait;
       demo.label = '';
       demo.labelAgent = null;
+      if (step.triggerDataEntry) triggerDataEntryErrand();
     } else {
       // Recall agents from pantry if needed for this step
       const walker = agents.find(a => a.name === step.agent);
@@ -1555,6 +1647,9 @@ function updateDemo(dt) {
         demo.phase = 'active';
         demo.label = step.label || '';
         demo.labelAgent = step.agent;
+        if (step.triggerJrAnalyst) triggerJrAnalystErrand();
+        if (step.triggerJrTrader) triggerJrTraderErrand();
+        if (step.triggerCompliance) triggerCompliancePatrol();
       }
     }
   }
@@ -1580,36 +1675,7 @@ function updateDemo(dt) {
 
 // ── NPC animations ────────────────────────────────────────────
 function updateNPCs(dt) {
-  const trd4 = agents.find(a => a.name === 'Trader4');
-  if (trd4) {
-    if (trd4.npcState === 'seated') {
-      trd4.npcTimer -= dt;
-      if (trd4.npcTimer <= 0) {
-        trd4.npcState = 'climbing';
-        trd4.npcTimer = 0.6;
-      }
-    } else if (trd4.npcState === 'climbing') {
-      trd4.npcTimer -= dt;
-      if (trd4.npcTimer <= 0) {
-        trd4.npcState = 'dancing';
-        trd4.npcTimer = 4 + Math.random() * 3;
-        trd4.dancePhase = 0;
-      }
-    } else if (trd4.npcState === 'dancing') {
-      trd4.dancePhase += dt * 8;
-      trd4.npcTimer -= dt;
-      if (trd4.npcTimer <= 0) {
-        trd4.npcState = 'descending';
-        trd4.npcTimer = 0.6;
-      }
-    } else if (trd4.npcState === 'descending') {
-      trd4.npcTimer -= dt;
-      if (trd4.npcTimer <= 0) {
-        trd4.npcState = 'seated';
-        trd4.npcTimer = 8 + Math.random() * 15;
-      }
-    }
-  }
+  // Trader4 (Compliance) — dancing disabled
 }
 
 function drawNPCEffect(agent, pos) {
@@ -1895,79 +1961,71 @@ function draw() {
   const npFs = Math.min(10, Math.max(5, Math.round(7.7 * s)));
 
   // Nameplate helper (draws on desk surface, optional title below name)
-  function drawNP(name, gx, gy, title) {
+  function drawNP(name, gx, gy) {
     ctx.font = `bold ${npFs}px "SF Mono", "Courier New", monospace`;
     ctx.textAlign = 'center';
     const p = isoToScreen(gx, gy);
     const tw = ctx.measureText(name).width;
-    const titleFs = Math.round(npFs * 0.7);
-    const totalH = title ? npFs + titleFs + 3 : npFs + 2;
-    const bgW = title ? Math.max(tw, ctx.measureText(title).width * 0.7) + 8 : tw + 4;
     ctx.fillStyle = 'rgba(30,36,48,0.7)';
-    ctx.fillRect(p.x - bgW / 2, p.y - deskH - totalH + 1, bgW, totalH);
+    ctx.fillRect(p.x - tw / 2 - 2, p.y - deskH - npFs, tw + 4, npFs + 2);
     ctx.fillStyle = '#8a9aaa';
-    ctx.fillText(name, p.x, p.y - deskH - (title ? titleFs + 2 : 0));
-    if (title) {
-      ctx.font = `${titleFs}px "SF Mono", "Courier New", monospace`;
-      ctx.fillStyle = '#6a7a8a';
-      ctx.fillText(title, p.x, p.y - deskH);
-    }
+    ctx.fillText(name, p.x, p.y - deskH);
   }
 
   // -- Desk groups (each with cubes + monitors + nameplate) --
   drawList.push({ depth: 4 + 2, fn() {
     drawCube(3,2,1,deskH,1,'#7a6050'); drawCube(4,2,1,deskH,1,'#7a6050'); drawCube(5,2,1,deskH,1,'#7a6050');
     drawLargeMonitor(3.5,2.5,'#1a3848'); drawLargeMonitor(4.5,2.5,'#1a3848');
-    drawNP('Strategist', 4.5, 2.5, 'CIO');
+    drawNP('CIO', 4.5, 2.5);
   }});
   drawList.push({ depth: 11 + 2, fn() {
     drawCube(10,2,1,deskH,1,'#7a6050'); drawCube(11,2,1,deskH,1,'#7a6050'); drawCube(12,2,1,deskH,1,'#7a6050');
     drawLargeMonitor(10.5,2.5,'#481a28'); drawLargeMonitor(11.5,2.5,'#481a28');
-    drawNP('Circuit', 11.5, 2.5, 'CRO');
+    drawNP('CRO', 11.5, 2.5);
   }});
   drawList.push({ depth: 3.5 + 7, fn() {
     drawCube(3,7,1,deskH,1,'#8a7560'); drawCube(4,7,1,deskH,1,'#8a7560');
-    drawMonitor(3.5,7.5,'#1a4838'); drawNP('NewsScout', 3.5, 7.5);
+    drawMonitor(3.5,7.5,'#1a4838'); drawNP('Research', 3.5, 7.5);
   }});
   drawList.push({ depth: 6.5 + 7, fn() {
     drawCube(6,7,1,deskH,1,'#8a7560'); drawCube(7,7,1,deskH,1,'#8a7560');
-    drawMonitor(6.5,7.5,'#1a3848'); drawNP('Analyst', 6.5, 7.5);
+    drawMonitor(6.5,7.5,'#1a3848'); drawNP('Sr Analyst', 6.5, 7.5);
   }});
   drawList.push({ depth: 9.5 + 7, fn() {
     drawCube(9,7,1,deskH,1,'#8a7560'); drawCube(10,7,1,deskH,1,'#8a7560');
-    drawMonitor(9.5,7.5,'#3a1a48'); drawNP('Chart', 9.5, 7.5);
+    drawMonitor(9.5,7.5,'#3a1a48'); drawNP('Tech Analyst', 9.5, 7.5);
   }});
   drawList.push({ depth: 12.5 + 7, fn() {
     drawCube(12,7,1,deskH,1,'#8a7560'); drawCube(13,7,1,deskH,1,'#8a7560');
-    drawMonitor(12.5,7.5,'#481a1a'); drawNP('Devil', 12.5, 7.5);
+    drawMonitor(12.5,7.5,'#481a1a'); drawNP('Risk Analyst', 12.5, 7.5);
   }});
   drawList.push({ depth: 2 + 10, fn() {
     drawCube(2,10,1,deskH,1,'#7a6a50'); drawMonitor(2.5,10.5,'#48401a');
-    drawNP('Risk', 2.5, 10.5);
+    drawNP('Risk Mgr', 2.5, 10.5);
   }});
   drawList.push({ depth: 5 + 10, fn() {
     drawCube(5,10,1,deskH,1,'#7a6a50'); drawMonitor(5.5,10.5,'#48381a');
-    drawNP('Executor', 5.5, 10.5);
+    drawNP('Hd of Trading', 5.5, 10.5);
   }});
   drawList.push({ depth: 8 + 10, fn() {
     drawCube(8,10,1,deskH,1,'#7a6a50'); drawMonitor(8.5,10.5,'#1a4842');
-    drawNP('Journal', 8.5, 10.5);
+    drawNP('Auditor', 8.5, 10.5);
   }});
   drawList.push({ depth: 2 + 13, fn() {
     drawCube(2,13,1,deskH,1,'#7a6a55'); drawMonitor(2.5,13.5,'#2a3828');
-    drawNP('Intern', 2.5, 13.5);
+    drawNP('Jr Analyst', 2.5, 13.5);
   }});
   drawList.push({ depth: 5 + 13, fn() {
     drawCube(5,13,1,deskH,1,'#7a6a55'); drawMonitor(5.5,13.5,'#28382a');
-    drawNP('Intern', 5.5, 13.5);
+    drawNP('Jr Trader', 5.5, 13.5);
   }});
   drawList.push({ depth: 8 + 13, fn() {
     drawCube(8,13,1,deskH,1,'#7a6a55'); drawMonitor(8.5,13.5,'#382a28');
-    drawNP('Intern', 8.5, 13.5);
+    drawNP('Data Entry', 8.5, 13.5);
   }});
   drawList.push({ depth: 11 + 10, fn() {
     drawCube(11,10,1,deskH,1,'#7a6a55'); drawMonitor(11.5,10.5,'#28283a');
-    drawNP('Intern', 11.5, 10.5);
+    drawNP('Compliance', 11.5, 10.5);
   }});
 
   // -- Agents --
@@ -2007,7 +2065,7 @@ function draw() {
     const _seated = isSeated, _leg = legP, _bob = bob;
 
     drawList.push({ depth: drawGx + drawGy + depthBias, fn() {
-      const pos = drawCharacter(_gx, _gy, _a.colors, _a.accessory, _leg, _bob, _seated);
+      const pos = drawCharacter(_gx, _gy, _a.colors, _a.accessory, _leg, _bob, _seated, _a.female);
       if (_a.npc) drawNPCEffect(_a, pos);
       if (_a.state === 'interacting') bubbleQueue.push({ x: pos.x, y: pos.baseY });
     }});
@@ -2049,7 +2107,7 @@ function animLoop(timestamp) {
   animTime += cappedDt;
 
   updateAgents(cappedDt);
-  updatePantryVisits(cappedDt);
+  // updatePantryVisits(cappedDt);  // disabled — causes position bugs on rush-back
   processLiveEvents();         // handle real-time WS events
   if (!liveMode) updateDemo(cappedDt);  // demo loop pauses during live events
   updateNPCs(cappedDt);
