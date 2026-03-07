@@ -154,6 +154,29 @@ async def get_phantom() -> dict[str, Any]:
     })
 
 
+@app.get("/api/signal-accuracy")
+async def get_signal_accuracy() -> dict[str, Any]:
+    data = _read_json(os.path.join(DATA_DIR, "signal_accuracy.json"), [])
+    if isinstance(data, list):
+        # Compute summary from raw signal list
+        total = len(data)
+        executed = [s for s in data if s.get("pipeline_outcome") == "executed"]
+        closed = [s for s in data if s.get("exit_price") is not None]
+        wins = [s for s in closed if s.get("signal_correct") is True]
+        losses = [s for s in closed if s.get("signal_correct") is False]
+        closed_count = len(closed)
+        return {
+            "total_signals": total,
+            "executed": len(executed),
+            "closed": closed_count,
+            "wins": len(wins),
+            "losses": len(losses),
+            "win_rate": round(len(wins) / closed_count * 100, 1) if closed_count > 0 else 0.0,
+            "recent": data[-10:] if data else [],
+        }
+    return {"total_signals": 0, "executed": 0, "closed": 0, "wins": 0, "losses": 0, "win_rate": 0.0, "recent": []}
+
+
 @app.get("/api/events/recent")
 async def get_recent_events() -> list[dict[str, Any]]:
     return event_bus.get_recent(50)

@@ -8,9 +8,10 @@ All methods return standardized article dicts, never raise.
 
 from __future__ import annotations
 
+import json
 import os
 import time
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any
 
 import feedparser
@@ -54,33 +55,98 @@ AV_TICKERS = {
     "GLD": "GLD",
 }
 
+SEEN_ARTICLES_FILE = os.path.join(
+    os.path.dirname(os.path.dirname(__file__)), "data", "seen_articles.json"
+)
+
 
 class NewsFetcher:
     """Fetch and aggregate financial news from multiple sources."""
 
-    def __init__(self):
+    def __init__(self, inter_feed_delay: float = 1.5):
         self._av_key: str = os.getenv("ALPHA_VANTAGE_API_KEY", "")
         self._cc_key: str = os.getenv("CRYPTOCOMPARE_API_KEY", "")
         self._av_timestamps: list[float] = []
         self._av_max_per_min: int = 5
 
+        # Item 1: requests.Session with User-Agent
+        self._session = requests.Session()
+        self._session.headers["User-Agent"] = (
+            "TradingSystem/1.0 (+https://tradebot.codeandcraft.ai)"
+        )
+
+        # Item 2: Inter-feed delay
+        self._inter_feed_delay = inter_feed_delay
+
+        # Item 3: Persistent dedup
+        self._seen_articles: dict[str, dict] = self._load_seen_articles()
+
+        # Item 4: Per-feed failure tracking with exponential backoff
+        self._feed_failures: dict[str, dict] = {}
+        self._cycle_count: int = 0
+
+        # Item 5: Stale feed detection
+        self._feed_last_new_article: dict[str, str] = {}
+
+    # ------------------------------------------------------------------
+    # Item 3: Persistent dedup helpers
+    # ------------------------------------------------------------------
+
+    def _load_seen_articles(self) -> dict[str, dict]:
+        """Load seen articles from JSON file."""
+        try:
+            with open(SEEN_ARTICLES_FILE, "r") as f:
+                return json.load(f)
+        except Exception:
+            return {}
+
+    def _persist_seen_articles(self) -> None:
+        """Write seen articles to JSON file."""
+        try:
+            os.makedirs(os.path.dirname(SEEN_ARTICLES_FILE), exist_ok=True)
+            with open(SEEN_ARTICLES_FILE, "w") as f:
+                json.dump(self._seen_articles, f, indent=2)
+        except Exception as e:
+            log.warning("Failed to persist seen articles: %s", e)
+
+    def _cleanup_expired_articles(self) -> None:
+        """Remove entries where first_seen is older than 48 hours."""
+        cutoff = datetime.utcnow() - timedelta(hours=48)
+        expired = [
+            key
+            for key, val in self._seen_articles.items()
+            if datetime.fromisoformat(val.get("first_seen", "2000-01-01")) < cutoff
+        ]
+        for key in expired:
+            del self._seen_articles[key]
+
+    # ------------------------------------------------------------------
+    # Item 4: Raw RSS fetch (raises on error)
+    # ------------------------------------------------------------------
+
+    def _fetch_rss_raw(self, feed_url: str) -> list[dict[str, str]]:
+        """Parse an RSS feed and return standardized articles. Raises on error."""
+        feed = feedparser.parse(
+            feed_url, agent=self._session.headers["User-Agent"]
+        )
+        articles = []
+        for entry in feed.get("entries", []):
+            articles.append(
+                self._standardize_article(
+                    title=entry.get("title", ""),
+                    summary=entry.get("summary", entry.get("description", "")),
+                    link=entry.get("link", ""),
+                    published=entry.get("published", ""),
+                    source=feed.get("feed", {}).get("title", feed_url),
+                )
+            )
+        log.info("Fetched %d articles from %s", len(articles), feed_url[:50])
+        return articles
+
     def fetch_rss(self, feed_url: str) -> list[dict[str, str]]:
         """Parse an RSS feed and return standardized articles."""
         try:
-            feed = feedparser.parse(feed_url)
-            articles = []
-            for entry in feed.get("entries", []):
-                articles.append(
-                    self._standardize_article(
-                        title=entry.get("title", ""),
-                        summary=entry.get("summary", entry.get("description", "")),
-                        link=entry.get("link", ""),
-                        published=entry.get("published", ""),
-                        source=feed.get("feed", {}).get("title", feed_url),
-                    )
-                )
-            log.info("Fetched %d articles from %s", len(articles), feed_url[:50])
-            return articles
+            return self._fetch_rss_raw(feed_url)
         except Exception as e:
             log.warning("RSS fetch failed for %s: %s", feed_url[:50], e)
             return []
@@ -90,13 +156,75 @@ class NewsFetcher:
         all_articles: list[dict[str, str]] = []
         seen_titles: set[str] = set()
 
-        for name, url in RSS_FEEDS.items():
-            articles = self.fetch_rss(url)
-            for article in articles:
-                title_lower = article["title"].lower().strip()
-                if title_lower and title_lower not in seen_titles:
-                    seen_titles.add(title_lower)
-                    all_articles.append(article)
+        # Item 4: Increment cycle count
+        self._cycle_count += 1
+
+        for i, (name, url) in enumerate(RSS_FEEDS.items()):
+            # Item 2: Inter-feed delay (skip for first feed)
+            if i > 0:
+                time.sleep(self._inter_feed_delay)
+
+            # Item 4: Check backoff
+            failure_info = self._feed_failures.get(name, {})
+            skip_until = failure_info.get("skip_until_cycle", 0)
+            if skip_until > self._cycle_count:
+                log.debug(
+                    "Skipping feed %s (backoff until cycle %d, current %d)",
+                    name,
+                    skip_until,
+                    self._cycle_count,
+                )
+                continue
+
+            try:
+                articles = self._fetch_rss_raw(url)
+                # Item 4: Success — reset failures
+                self._feed_failures.pop(name, None)
+
+                new_count = 0
+                for article in articles:
+                    title_lower = article["title"].lower().strip()
+                    if title_lower and title_lower not in seen_titles:
+                        seen_titles.add(title_lower)
+                        all_articles.append(article)
+                        new_count += 1
+
+                # Item 5: Track last time feed produced new articles
+                if new_count > 0:
+                    self._feed_last_new_article[name] = (
+                        datetime.utcnow().isoformat()
+                    )
+
+            except Exception as e:
+                # Item 4: Track failure with exponential backoff
+                info = self._feed_failures.get(name, {"consecutive_failures": 0})
+                info["consecutive_failures"] = info["consecutive_failures"] + 1
+                backoff = 2 ** min(info["consecutive_failures"], 3)
+                info["skip_until_cycle"] = self._cycle_count + backoff
+                self._feed_failures[name] = info
+                log.warning(
+                    "Feed %s failed (attempt %d, backoff %d cycles): %s",
+                    name,
+                    info["consecutive_failures"],
+                    backoff,
+                    e,
+                )
+
+        # Item 5: Stale feed detection (skip on first cycle)
+        if self._cycle_count > 1:
+            now = datetime.utcnow()
+            for feed_name, ts_str in self._feed_last_new_article.items():
+                # Don't warn for feeds currently in backoff
+                if feed_name in self._feed_failures:
+                    continue
+                last_new = datetime.fromisoformat(ts_str)
+                hours_since = (now - last_new).total_seconds() / 3600
+                if hours_since > 24:
+                    log.warning(
+                        "STALE FEED: %s has not produced new articles in %.1f hours",
+                        feed_name,
+                        hours_since,
+                    )
 
         log.info("Total unique RSS articles: %d", len(all_articles))
         return all_articles
@@ -123,7 +251,7 @@ class NewsFetcher:
         av_tickers = ",".join(AV_TICKERS.get(t, t) for t in tickers)
 
         try:
-            resp = requests.get(
+            resp = self._session.get(
                 ALPHA_VANTAGE_URL,
                 params={
                     "function": "NEWS_SENTIMENT",
@@ -173,7 +301,7 @@ class NewsFetcher:
             return []
 
         try:
-            resp = requests.get(
+            resp = self._session.get(
                 CRYPTOCOMPARE_URL,
                 params={"lang": "EN"},
                 headers={"Authorization": f"Apikey {self._cc_key}"},
@@ -228,18 +356,31 @@ class NewsFetcher:
 
         This is the main entry point called by NewsScout.
         """
+        # Item 3: Clean up expired seen articles
+        self._cleanup_expired_articles()
+
         all_articles = self.fetch_all_rss()
         all_articles.extend(self.fetch_alpha_vantage_news(tickers))
         all_articles.extend(self.fetch_crypto_news())
 
-        # Deduplicate by title
+        # Deduplicate by title (in-batch)
         seen: set[str] = set()
         unique: list[dict[str, str]] = []
         for article in all_articles:
             title_lower = article["title"].lower().strip()
             if title_lower and title_lower not in seen:
                 seen.add(title_lower)
-                unique.append(article)
+                # Item 3: Persistent dedup — check against seen_articles
+                dedup_key = article.get("link") or title_lower
+                if dedup_key not in self._seen_articles:
+                    self._seen_articles[dedup_key] = {
+                        "title": article["title"],
+                        "first_seen": datetime.utcnow().isoformat(),
+                    }
+                    unique.append(article)
+
+        # Item 3: Persist after dedup
+        self._persist_seen_articles()
 
         log.info("Total aggregated articles: %d", len(unique))
         return unique

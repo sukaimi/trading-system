@@ -86,6 +86,7 @@ class SignalAlert(BaseModel):
     type: str = "signal_alert"
     timestamp: datetime = Field(default_factory=datetime.utcnow)
     source: str = "news_scout"
+    signal_id: str = ""
     asset: str
     signal_strength: float = Field(ge=0.0, le=1.0)
 

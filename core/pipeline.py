@@ -9,6 +9,7 @@ See TRADING_AGENT_PRD.md Section 4 for the communication map.
 from __future__ import annotations
 
 import json
+import uuid
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 from pathlib import Path
@@ -25,6 +26,7 @@ from core.executor import Executor
 from core.llm_client import LLMClient
 from core.logger import setup_logger
 from core.phantom_tracker import PhantomTracker
+from core.signal_tracker import SignalAccuracyTracker
 from core.portfolio import PortfolioState
 from core.risk_manager import RiskManager
 from core.schemas import (
@@ -72,6 +74,7 @@ class TradingPipeline:
             telegram=self._telegram,
         )
         self._phantom = PhantomTracker()
+        self._signal_tracker = SignalAccuracyTracker()
 
         # Load risk params for auto-recovery cooldown + default stop-loss
         self._risk_params: dict[str, Any] = {}
@@ -108,6 +111,11 @@ class TradingPipeline:
                 "signals": [{"headline": s.headline, "asset": s.asset, "strength": s.signal_strength} for s in signals],
             })
 
+            # Assign signal_id and record in signal tracker
+            for sig in signals:
+                sig.signal_id = f"sig_{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')}_{sig.asset}_{uuid.uuid4().hex[:4]}"
+                self._signal_tracker.record_signal(sig.signal_id, sig, source_type="chart_scan")
+
             if signals:
                 self.process_signals(signals)
 
@@ -132,6 +140,11 @@ class TradingPipeline:
                 "signal_count": len(signals),
                 "signals": [{"headline": s.headline, "asset": s.asset, "strength": s.signal_strength} for s in signals],
             })
+
+            # Assign signal_id and record in signal tracker
+            for sig in signals:
+                sig.signal_id = f"sig_{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')}_{sig.asset}_{uuid.uuid4().hex[:4]}"
+                self._signal_tracker.record_signal(sig.signal_id, sig, source_type="news_scan")
 
             if signals:
                 self.process_signals(signals)
@@ -205,6 +218,8 @@ class TradingPipeline:
             log.error("Market Analyst failed for %s: %s", signal.asset, e)
             result["outcome"] = "analyst_error"
             result["error"] = str(e)
+            if signal.signal_id:
+                self._signal_tracker.record_outcome(signal.signal_id, "analyst_error")
             return {"signal": signal, "result": result, "thesis": None, "verdict": None}
 
         if thesis is None:
@@ -215,6 +230,8 @@ class TradingPipeline:
             except Exception as e:
                 log.error("Journal record_no_trade failed: %s", e)
             result["outcome"] = "no_trade"
+            if signal.signal_id:
+                self._signal_tracker.record_outcome(signal.signal_id, "no_trade")
             return {"signal": signal, "result": result, "thesis": None, "verdict": None}
 
         result["thesis"] = thesis.thesis
@@ -235,6 +252,8 @@ class TradingPipeline:
             log.error("Devil's Advocate failed for %s: %s", signal.asset, e)
             result["outcome"] = "devil_error"
             result["error"] = str(e)
+            if signal.signal_id:
+                self._signal_tracker.record_outcome(signal.signal_id, "devil_error")
             return {"signal": signal, "result": result, "thesis": thesis, "verdict": None}
 
         result["verdict"] = verdict.verdict.value
@@ -264,6 +283,12 @@ class TradingPipeline:
                 thesis=thesis.thesis,
             )
             result["outcome"] = "killed"
+            if signal.signal_id:
+                self._signal_tracker.record_outcome(
+                    signal.signal_id, "killed",
+                    killed_by="devils_advocate",
+                    kill_reason=verdict.final_reasoning[:200],
+                )
             return {"signal": signal, "result": result, "thesis": thesis, "verdict": verdict}
 
         # Analysis passed — mark for serial execution phase
@@ -284,6 +309,8 @@ class TradingPipeline:
             log.error("Risk validation failed for %s: %s", signal.asset, e)
             result["outcome"] = "risk_error"
             result["error"] = str(e)
+            if signal.signal_id:
+                self._signal_tracker.record_outcome(signal.signal_id, "risk_error")
             return result
 
         event_bus.emit("pipeline", "risk_check", {
@@ -308,6 +335,11 @@ class TradingPipeline:
             )
             result["outcome"] = "risk_rejected"
             result["risk_reason"] = reason
+            if signal.signal_id:
+                self._signal_tracker.record_outcome(
+                    signal.signal_id, "risk_rejected",
+                    killed_by="risk_manager", kill_reason=reason,
+                )
             return result
 
         order_to_execute = adjusted or exec_order
@@ -319,12 +351,16 @@ class TradingPipeline:
             log.error("Execution failed for %s: %s", signal.asset, e)
             result["outcome"] = "execution_error"
             result["error"] = str(e)
+            if signal.signal_id:
+                self._signal_tracker.record_outcome(signal.signal_id, "execution_error")
             return result
 
         if confirmation.get("type") == "order_error":
             log.warning("Order error: %s", confirmation.get("error"))
             result["outcome"] = "execution_error"
             result["error"] = confirmation.get("error", "")
+            if signal.signal_id:
+                self._signal_tracker.record_outcome(signal.signal_id, "execution_error")
             return result
 
         # Step 5: Record in journal
@@ -372,6 +408,13 @@ class TradingPipeline:
 
         result["outcome"] = "executed"
         result["fill_price"] = confirmation.get("fill_price", 0.0)
+        if signal.signal_id:
+            self._signal_tracker.record_outcome(
+                signal.signal_id, "executed",
+                trade_id=str(confirmation.get("order_id", "")),
+                direction=thesis.direction.value,
+                entry_price=confirmation.get("fill_price", 0.0),
+            )
         event_bus.emit("pipeline", "trade_executed", {
             "asset": thesis.asset, "direction": thesis.direction.value,
             "fill_price": confirmation.get("fill_price", 0), "quantity": confirmation.get("quantity", 0),
