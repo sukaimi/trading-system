@@ -2,7 +2,7 @@
   "max_position_pct": 7.0,
   "max_daily_loss_pct": 5.0,
   "max_total_drawdown_pct": 15.0,
-  "max_open_positions": 10,
+  "max_open_positions": 20,
   "max_correlation": 0.50,
   "stop_loss_atr_mult": 2.0,
   "base_risk_per_trade_pct": 2.0,
