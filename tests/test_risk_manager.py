@@ -67,8 +67,9 @@ class TestValidateOrder:
         assert approved is False
         assert "positions reached" in reason
 
-    def test_check5_duplicate_asset_blocked(self, risk_config, sample_portfolio_state):
-        """Duplicate asset should be rejected."""
+    @patch.object(RiskManager, "_check_correlation", return_value=(True, ""))
+    def test_check5_duplicate_asset_allowed_with_warning(self, mock_corr, risk_config, sample_portfolio_state):
+        """Duplicate asset should be allowed through (DA handles sizing)."""
         rm = RiskManager(risk_config)
         order = {
             "asset": "BTC",
@@ -77,8 +78,7 @@ class TestValidateOrder:
             "stop_loss": 60000.0,
         }
         approved, reason, _ = rm.validate_order(order, sample_portfolio_state)
-        assert approved is False
-        assert "Duplicate asset BTC" in reason
+        assert approved is True
 
     def test_check6_no_stop_loss_rejected(self, risk_config, sample_portfolio_state):
         rm = RiskManager(risk_config)

@@ -83,14 +83,15 @@ class RiskManager:
                 None,
             )
 
-        # Check 5: Duplicate asset prevention
+        # Check 5: Duplicate asset — log warning but allow through
+        # The Devil's Advocate already flags this as a soft challenge.
+        # Blocking here was causing 86% kill rate on add-to-position signals.
         asset = execution_order.get("asset", "")
         for pos in open_positions:
             if pos.get("asset") == asset:
-                return (
-                    False,
-                    f"Duplicate asset {asset} already in portfolio",
-                    None,
+                log.warning(
+                    "Duplicate asset %s already in portfolio — allowing through (DA handles sizing)",
+                    asset,
                 )
 
         # Check 6: Stop-loss must be defined

@@ -1,5 +1,5 @@
 {
-  "version": 47,
-  "last_updated": "2026-03-08T02:50:38.516267",
-  "notes": "v46: Proactive scan, regime holding periods, reflexivity detection, principle extraction, kill switch"
+  "version": 52,
+  "last_updated": "2026-03-08T12:35:00.000000",
+  "notes": "v52: Fix gridlock — duplicate asset soft flag, relax correlation 0.50→0.65, remove pre-filter block"
 }

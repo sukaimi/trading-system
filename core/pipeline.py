@@ -288,28 +288,17 @@ class TradingPipeline:
         }
 
         # ── Pre-LLM filter (Tier 0, free) ─────────────────────────────────
-        # Skip if we already hold this asset — avoids wasting an LLM call
+        # Note: duplicate asset is no longer a hard pre-filter.
+        # The Devil's Advocate will flag it as a regular challenge instead,
+        # allowing high-confidence add-to-position or reversal signals through.
         held_assets = {
             pos.get("asset") for pos in self._portfolio.open_positions
         }
         if signal.asset in held_assets:
             log.info(
-                "PRE-FILTER: skipping %s — already holding position",
+                "PRE-FILTER: %s already held — passing through to DA for review",
                 signal.asset,
             )
-            result["outcome"] = "pre_filtered"
-            result["filter_reason"] = "already_holding"
-            self._funnel_stats["pre_filtered"] += 1
-            if signal.signal_id:
-                self._signal_tracker.record_outcome(
-                    signal.signal_id, "pre_filtered"
-                )
-            return {
-                "signal": signal,
-                "result": result,
-                "thesis": None,
-                "verdict": None,
-            }
 
         # Log earnings context (informational only — don't block)
         earnings_days = self._earnings_cal.days_until_earnings(signal.asset)

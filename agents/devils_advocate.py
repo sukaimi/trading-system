@@ -157,18 +157,21 @@ class DevilsAdvocate:
         confidence_adjusted = float(result.get("confidence_adjusted", trade_thesis.confidence * 0.9))
         modifications = result.get("modifications", [])
 
-        # Duplicate asset is a fatal flaw — prevents position stacking
+        # Duplicate asset is a soft flag — counts toward min_challenges_for_kill
+        # but does NOT auto-kill. High-confidence trades can still pass.
         if dup_warning:
-            log.info("Fatal flaw: %s", dup_warning)
-            return DevilsVerdict(
-                original_thesis_id=thesis_id,
-                verdict=Verdict.KILLED,
-                challenges=challenges,
-                flags_raised=flags + 1,
-                fatal_flaws=[dup_warning],
-                confidence_adjusted=0.0,
-                final_reasoning=f"Duplicate asset blocked: {dup_warning}",
-            )
+            flags += 1
+            modifications.append(dup_warning)
+            if trade_thesis.confidence >= 0.65:
+                log.info(
+                    "Duplicate asset flagged but high confidence (%.2f) — allowing through: %s",
+                    trade_thesis.confidence, dup_warning,
+                )
+            else:
+                log.info(
+                    "Duplicate asset flagged (confidence %.2f): %s",
+                    trade_thesis.confidence, dup_warning,
+                )
 
         kill_threshold = self._params.get("kill_thresholds", {}).get(
             "min_challenges_for_kill", 3

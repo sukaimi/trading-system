@@ -82,7 +82,7 @@ class TestCheckFatalFlaws:
         assert any("daily loss" in f.lower() for f in flaws)
 
     def test_duplicate_asset_warning_detected(self, devil, valid_thesis, healthy_portfolio):
-        """Duplicate asset is detected by _duplicate_asset_warning (used as fatal flaw in challenge)."""
+        """Duplicate asset is detected by _duplicate_asset_warning (soft flag in challenge)."""
         healthy_portfolio["open_positions"] = [{"asset": "BTC"}]
         warning = devil._duplicate_asset_warning(valid_thesis, healthy_portfolio)
         assert warning is not None
