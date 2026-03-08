@@ -9,7 +9,7 @@ from __future__ import annotations
 import json
 import os
 import threading
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any
 
 from core.event_bus import event_bus
@@ -47,6 +47,11 @@ class PortfolioState:
         self.total_losses: int = 0
         self.halted: bool = False
         self.last_updated: str = datetime.utcnow().isoformat()
+        self._friction = None
+
+    def set_friction(self, friction):
+        """Set the TradingFriction instance for paper mode friction."""
+        self._friction = friction
 
     # ── Thread-safe accessors ──────────────────────────────────────────
 
@@ -130,9 +135,36 @@ class PortfolioState:
             if pnl_pct > pos.get("mfe_pct", 0.0):
                 pos["mfe_pct"] = round(pnl_pct, 2)
 
+        # Deduct accrued borrow costs for short positions (paper mode only)
+        total_borrow_cost = 0.0
+        if self._friction and self._friction.enabled:
+            for pos in positions:
+                if pos.get("direction") != "short":
+                    continue
+                asset = pos.get("asset", "")
+                quantity = pos.get("quantity", 0.0)
+                entry_price = pos.get("entry_price", 0.0)
+                current_price = pos.get("current_price", entry_price)
+                timestamp_open = pos.get("timestamp_open", "")
+                if not timestamp_open or not quantity:
+                    continue
+                try:
+                    open_dt = datetime.fromisoformat(timestamp_open.replace("Z", "+00:00"))
+                    now = datetime.now(timezone.utc)
+                    days_held = (now - open_dt).total_seconds() / 86400
+                    borrow = self._friction.accrued_borrow_cost(asset, current_price, quantity, days_held)
+                    if borrow > 0:
+                        pos["accrued_borrow_cost"] = round(borrow, 4)
+                        total_borrow_cost += borrow
+                except Exception:
+                    pass
+
+            if total_borrow_cost > 0:
+                log.info("Total accrued borrow cost for shorts: $%.4f", total_borrow_cost)
+
         # Base equity = current equity minus old unrealized (gives capital + realized gains)
         base_equity = current_equity - old_unrealized
-        new_equity = base_equity + total_unrealized_pnl
+        new_equity = base_equity + total_unrealized_pnl - total_borrow_cost
         log.info(
             "Equity recalculated: $%.2f (base=$%.2f, unrealized=$%.2f)",
             new_equity, base_equity, total_unrealized_pnl,

@@ -43,6 +43,7 @@ from core.earnings_calendar import EarningsCalendar
 from core.regime_classifier import RegimeClassifier
 from core.regime_strategy import RegimeStrategySelector
 from core.session_analyzer import SessionAnalyzer
+from core.trading_friction import TradingFriction
 from tools.correlation import CorrelationAnalyzer
 from tools.market_data import MarketDataFetcher
 from tools.telegram_bot import TelegramNotifier
@@ -86,6 +87,10 @@ class TradingPipeline:
         self._session_analyzer = SessionAnalyzer()
         self._confidence_cal = ConfidenceCalibrator()
         self._regime_strategy = RegimeStrategySelector()
+
+        # Trading friction simulator (active in paper mode only)
+        self._friction = TradingFriction(paper_mode=getattr(executor, "paper_mode", True))
+        self._portfolio.set_friction(self._friction)
 
         # Load risk params for auto-recovery cooldown + default stop-loss
         self._risk_params: dict[str, Any] = {}
@@ -453,19 +458,27 @@ class TradingPipeline:
 
         # Step 6: Update portfolio
         try:
+            fill_price = confirmation.get("fill_price", 0.0)
+            fill_qty = confirmation.get("quantity", order_to_execute.get("quantity", 0))
             self._portfolio.add_position({
                 "trade_id": confirmation.get("order_id", ""),
                 "asset": thesis.asset,
                 "direction": thesis.direction.value,
-                "entry_price": confirmation.get("fill_price", 0.0),
+                "entry_price": fill_price,
                 "position_size_pct": thesis.suggested_position_pct,
-                "quantity": confirmation.get("quantity", order_to_execute.get("quantity", 0)),
+                "quantity": fill_qty,
                 "stop_loss_price": order_to_execute.get("stop_loss"),
                 "take_profit_price": order_to_execute.get("take_profit"),
                 "timestamp_open": datetime.now(timezone.utc).isoformat(),
                 "mae_pct": 0.0,
                 "mfe_pct": 0.0,
             })
+            # Deduct entry friction from equity
+            entry_friction = self._friction.total_entry_cost(
+                thesis.asset, fill_price, fill_qty, thesis.direction.value
+            )
+            if entry_friction > 0:
+                self._portfolio.update_equity(self._portfolio.equity - entry_friction)
             self._portfolio.persist()
         except Exception as e:
             log.error("Portfolio update failed: %s", e)
@@ -748,6 +761,11 @@ class TradingPipeline:
 
             self._portfolio.record_trade(pnl)
 
+            # Deduct exit friction from equity
+            exit_friction = self._friction.total_exit_cost(asset, exit_price, quantity, direction)
+            if exit_friction > 0:
+                self._portfolio.update_equity(self._portfolio.equity - exit_friction)
+
             event_bus.emit("stop_loss", "triggered", {
                 "trade_id": trade_id,
                 "asset": asset,
@@ -901,6 +919,11 @@ class TradingPipeline:
                 pnl = (entry_price - exit_price) * quantity
 
             self._portfolio.record_trade(pnl)
+
+            # Deduct exit friction from equity
+            exit_friction = self._friction.total_exit_cost(asset, exit_price, quantity, direction)
+            if exit_friction > 0:
+                self._portfolio.update_equity(self._portfolio.equity - exit_friction)
 
             event_bus.emit("take_profit", "triggered", {
                 "trade_id": trade_id,
@@ -1058,6 +1081,11 @@ class TradingPipeline:
                 pnl = (entry_price - exit_price) * quantity
 
             self._portfolio.record_trade(pnl)
+
+            # Deduct exit friction from equity
+            exit_friction = self._friction.total_exit_cost(asset, exit_price, quantity, direction)
+            if exit_friction > 0:
+                self._portfolio.update_equity(self._portfolio.equity - exit_friction)
 
             event_bus.emit("pipeline", "time_exit", {
                 "trade_id": trade_id,
@@ -1410,19 +1438,27 @@ class TradingPipeline:
 
         # Portfolio update
         try:
+            fill_price = confirmation.get("fill_price", 0.0)
+            fill_qty = confirmation.get("quantity", order_to_execute.get("quantity", 0))
             self._portfolio.add_position({
                 "trade_id": confirmation.get("order_id", ""),
                 "asset": thesis.asset,
                 "direction": thesis.direction.value,
-                "entry_price": confirmation.get("fill_price", 0.0),
+                "entry_price": fill_price,
                 "position_size_pct": thesis.suggested_position_pct,
-                "quantity": confirmation.get("quantity", order_to_execute.get("quantity", 0)),
+                "quantity": fill_qty,
                 "stop_loss_price": order_to_execute.get("stop_loss"),
                 "take_profit_price": order_to_execute.get("take_profit"),
                 "timestamp_open": datetime.now(timezone.utc).isoformat(),
                 "mae_pct": 0.0,
                 "mfe_pct": 0.0,
             })
+            # Deduct entry friction from equity
+            entry_friction = self._friction.total_entry_cost(
+                thesis.asset, fill_price, fill_qty, thesis.direction.value
+            )
+            if entry_friction > 0:
+                self._portfolio.update_equity(self._portfolio.equity - entry_friction)
             self._portfolio.persist()
         except Exception as e:
             log.error("Portfolio update failed: %s", e)
