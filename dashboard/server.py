@@ -58,6 +58,15 @@ async def index() -> HTMLResponse:
     return HTMLResponse(content=content)
 
 
+@app.get("/v2", response_class=HTMLResponse)
+async def index_v2() -> HTMLResponse:
+    """Prototype dashboard v2 — preview only."""
+    html_path = os.path.join(DASHBOARD_DIR, "static", "index-v2.html")
+    with open(html_path) as f:
+        content = f.read().replace("{{GA4_MEASUREMENT_ID}}", _ga4_id())
+    return HTMLResponse(content=content)
+
+
 @app.get("/agents", response_class=HTMLResponse)
 async def agent_floor() -> HTMLResponse:
     html_path = os.path.join(DASHBOARD_DIR, "static", "agent-floor.html")
