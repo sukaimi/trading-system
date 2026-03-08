@@ -1430,6 +1430,10 @@ class TradingPipeline:
         vol_avg_20 = sum(volumes[-20:]) / 20 if len(volumes) >= 20 else 0
         vol_ratio = round(volumes[-1] / vol_avg_20, 2) if vol_avg_20 > 0 else 0
 
+        # 2b. Liquidity sweep detection + volume anomaly scoring
+        sweep = ti.liquidity_sweep(highs, lows, closes)
+        vol_anomaly = ti.volume_anomaly(volumes)
+
         # 3. Compute price action (% changes)
         def pct_change(n: int) -> float:
             if len(closes) > n and closes[-n - 1] > 0:
@@ -1499,6 +1503,20 @@ class TradingPipeline:
         elif change_5d < -1:
             bearish_count += 1
 
+        # Liquidity sweep signals
+        if sweep["detected"]:
+            if sweep["type"] == "bullish":
+                bullish_count += 1
+            elif sweep["type"] == "bearish":
+                bearish_count += 1
+
+        # Volume spike confirms direction of 1d move
+        if vol_anomaly["level"] == "spike":
+            if change_1d > 0:
+                bullish_count += 1
+            elif change_1d < 0:
+                bearish_count += 1
+
         if bullish_count > bearish_count:
             sentiment = "bullish"
         elif bearish_count > bullish_count:
@@ -1511,6 +1529,17 @@ class TradingPipeline:
         regime_conf = regime_info.get("confidence", 0.5)
         signal_strength = round(min(1.0, (tech_clarity * 0.6 + regime_conf * 0.4)), 2)
         signal_strength = max(signal_strength, 0.3)  # Floor at 0.3
+
+        # 9b. Boost signal strength from sweep/volume anomaly
+        if sweep["detected"]:
+            sweep_matches = (
+                (sweep["type"] == "bullish" and sentiment == "bullish")
+                or (sweep["type"] == "bearish" and sentiment == "bearish")
+            )
+            if sweep_matches:
+                signal_strength = round(min(1.0, signal_strength + 0.15), 2)
+        if vol_anomaly["is_anomaly"]:
+            signal_strength = round(min(1.0, signal_strength + 0.10), 2)
 
         # 10. Build the headline with key information
         direction_hint = preferred_dir or ("long" if sentiment == "bullish" else "short" if sentiment == "bearish" else "neutral")
@@ -1537,6 +1566,15 @@ class TradingPipeline:
             f"{sma_cross}. "
             f"Regime strategy: prefer {preferred_dir or 'any'} direction, min confidence {min_confidence:.0%}."
         )
+        if sweep["detected"]:
+            new_info += (
+                f" LIQUIDITY SWEEP: {sweep['type']} sweep at {sweep['sweep_level']:.2f}, "
+                f"{sweep['reclaim_pct']:.0%} reclaimed."
+            )
+        if vol_anomaly["is_anomaly"]:
+            new_info += (
+                f" VOLUME ANOMALY: {vol_anomaly['ratio']:.1f}x average ({vol_anomaly['level']})."
+            )
 
         return SignalAlert(
             asset=asset,

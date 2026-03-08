@@ -154,6 +154,13 @@ disagreement patterns is unique to multi-agent architectures.
 | 9 | [x] **Signal funnel dashboard** — /api/signal-funnel endpoint + dashboard panel (DONE - v52) | Simple | Diagnostic |
 | 10 | [x] **Asymmetric R:R enforcement** — min 2:1 R:R gate + TP floor (DONE - v52) | Medium | Quality filter |
 
+### Tier 2.5: IN PROGRESS (Smart Signal Boosters)
+
+| # | Suggestion | Complexity | Impact |
+|---|-----------|-----------|--------|
+| 10a | **Liquidity sweep detection** — detect stop hunts + reclaims on OHLCV candles, boost proactive scan signals | Medium | Alpha source — institutional footprint |
+| 10b | **Volume anomaly scoring** — flag 2x+ avg volume as institutional interest, boost signal strength | Simple | Signal quality filter |
+
 ### Tier 3: MEDIUM (Week 4+ — After 30 Trades)
 
 | # | Suggestion | Complexity | Impact |
@@ -163,6 +170,13 @@ disagreement patterns is unique to multi-agent architectures.
 | 13 | **Chart-signal LLM bypass** | Medium | Cost reduction |
 | 14 | **Reduce universe to 5-6 for micro live** | Simple | Focus capital |
 | 15 | **Regime transition detection** | Complex | Alpha source |
+
+### Tier 3.5: DEFERRED (After 30+ Trades — Needs Data)
+
+| # | Suggestion | Complexity | Impact |
+|---|-----------|-----------|--------|
+| 15a | **Put/call ratio** — options flow as macro sentiment proxy | Medium | Institutional signal |
+| 15b | **Unusual options activity** — free API integration | Medium | Smart money tracking |
 
 ### Tier 4: LOW (When Profitable)
 

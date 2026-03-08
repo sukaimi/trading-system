@@ -265,6 +265,109 @@ class TechnicalIndicators:
         sma_vals = (cumsum[period:] - cumsum[:-period]) / period
         return [float(v) for v in sma_vals]
 
+    def liquidity_sweep(
+        self,
+        highs: list[float],
+        lows: list[float],
+        closes: list[float],
+        lookback: int = 20,
+    ) -> dict:
+        """Detect if the most recent candle swept a key support/resistance level.
+
+        A liquidity sweep occurs when price briefly breaks a key level (hunting
+        stops) then reverses back — a strong reversal signal.
+
+        Args:
+            highs/lows/closes: OHLC data, same length, oldest first.
+            lookback: Number of bars to find swing high/low (default 20).
+
+        Returns:
+            {"detected": bool, "type": str, "sweep_level": float, "reclaim_pct": float}
+        """
+        default = {"detected": False, "type": "none", "sweep_level": 0.0, "reclaim_pct": 0.0}
+        n = min(len(highs), len(lows), len(closes))
+        if n < lookback + 1:
+            return default
+
+        h = np.array(highs[:n], dtype=float)
+        l = np.array(lows[:n], dtype=float)
+        c = np.array(closes[:n], dtype=float)
+
+        # Swing high/low from the lookback window (exclude latest bar)
+        swing_high = float(np.max(h[-lookback - 1:-1]))
+        swing_low = float(np.min(l[-lookback - 1:-1]))
+
+        latest_high = float(h[-1])
+        latest_low = float(l[-1])
+        latest_close = float(c[-1])
+
+        # Bullish sweep: price dipped below swing low then closed above it
+        bullish = latest_low < swing_low and latest_close > swing_low
+        # Bearish sweep: price spiked above swing high then closed below it
+        bearish = latest_high > swing_high and latest_close < swing_high
+
+        if bullish:
+            # How far price reclaimed: 0 = closed right at swing_low, 1 = fully back to swing_high
+            sweep_range = swing_high - swing_low
+            reclaim_pct = (latest_close - swing_low) / sweep_range if sweep_range > 0 else 1.0
+            reclaim_pct = min(max(reclaim_pct, 0.0), 1.0)
+            return {
+                "detected": True,
+                "type": "bullish",
+                "sweep_level": swing_low,
+                "reclaim_pct": round(reclaim_pct, 4),
+            }
+
+        if bearish:
+            sweep_range = swing_high - swing_low
+            reclaim_pct = (swing_high - latest_close) / sweep_range if sweep_range > 0 else 1.0
+            reclaim_pct = min(max(reclaim_pct, 0.0), 1.0)
+            return {
+                "detected": True,
+                "type": "bearish",
+                "sweep_level": swing_high,
+                "reclaim_pct": round(reclaim_pct, 4),
+            }
+
+        return default
+
+    def volume_anomaly(self, volumes: list[float], period: int = 20) -> dict:
+        """Score how unusual current volume is vs recent average.
+
+        Args:
+            volumes: Volume data, oldest first.
+            period: Lookback period for average/stdev (default 20).
+
+        Returns:
+            {"ratio": float, "z_score": float, "is_anomaly": bool, "level": str}
+        """
+        default = {"ratio": 1.0, "z_score": 0.0, "is_anomaly": False, "level": "normal"}
+        if len(volumes) < period:
+            return default
+
+        arr = np.array(volumes[-period:], dtype=float)
+        avg = float(np.mean(arr))
+        std = float(np.std(arr, ddof=1)) if period > 1 else 0.0
+
+        latest = float(volumes[-1])
+        ratio = round(latest / avg, 4) if avg > 0 else 1.0
+        z_score = round((latest - avg) / std, 4) if std > 0 else 0.0
+
+        is_anomaly = ratio >= 2.0
+        if ratio >= 2.5:
+            level = "spike"
+        elif ratio >= 1.5:
+            level = "elevated"
+        else:
+            level = "normal"
+
+        return {
+            "ratio": ratio,
+            "z_score": z_score,
+            "is_anomaly": is_anomaly,
+            "level": level,
+        }
+
     def _ema(self, prices: list[float], period: int) -> list[float]:
         """Calculate Exponential Moving Average series.
 

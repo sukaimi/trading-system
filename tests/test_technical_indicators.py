@@ -99,3 +99,91 @@ class TestSMA:
 
     def test_sma_insufficient(self, ti):
         assert ti.sma([10.0, 20.0], 5) == 0.0
+
+
+class TestLiquiditySweep:
+    def test_bullish_sweep_detected(self, ti):
+        """Price dips below recent swing low then closes above it."""
+        # 20 bars of normal price action with a swing low around 95
+        highs = [float(105 + (i % 3)) for i in range(20)]
+        lows = [float(95 + (i % 3)) for i in range(20)]
+        closes = [float(100 + (i % 3)) for i in range(20)]
+        # 21st bar: sweeps below the swing low of 95 (low=93) but closes above it (close=97)
+        highs.append(100.0)
+        lows.append(93.0)
+        closes.append(97.0)
+
+        result = ti.liquidity_sweep(highs, lows, closes)
+        assert result["detected"] is True
+        assert result["type"] == "bullish"
+        assert result["sweep_level"] == min(lows[:20])
+        assert 0.0 < result["reclaim_pct"] <= 1.0
+
+    def test_bearish_sweep_detected(self, ti):
+        """Price spikes above recent swing high then closes below it."""
+        highs = [float(105 + (i % 3)) for i in range(20)]
+        lows = [float(95 + (i % 3)) for i in range(20)]
+        closes = [float(100 + (i % 3)) for i in range(20)]
+        # 21st bar: sweeps above the swing high of 107 (high=109) but closes below it (close=104)
+        highs.append(109.0)
+        lows.append(102.0)
+        closes.append(104.0)
+
+        result = ti.liquidity_sweep(highs, lows, closes)
+        assert result["detected"] is True
+        assert result["type"] == "bearish"
+        assert result["sweep_level"] == max(highs[:20])
+        assert 0.0 < result["reclaim_pct"] <= 1.0
+
+    def test_no_sweep_normal_action(self, ti):
+        """Normal price action within range — no sweep."""
+        highs = [float(105 + (i % 3)) for i in range(21)]
+        lows = [float(95 + (i % 3)) for i in range(21)]
+        closes = [float(100 + (i % 3)) for i in range(21)]
+
+        result = ti.liquidity_sweep(highs, lows, closes)
+        assert result["detected"] is False
+        assert result["type"] == "none"
+
+    def test_insufficient_data(self, ti):
+        """Returns safe defaults with too few bars."""
+        result = ti.liquidity_sweep([100.0] * 5, [99.0] * 5, [100.0] * 5, lookback=20)
+        assert result["detected"] is False
+        assert result["sweep_level"] == 0.0
+        assert result["reclaim_pct"] == 0.0
+
+
+class TestVolumeAnomaly:
+    def test_normal_volume(self, ti):
+        """Volume at average level — ratio ~1.0, not anomaly."""
+        volumes = [1000.0] * 20
+        result = ti.volume_anomaly(volumes)
+        assert result["ratio"] == pytest.approx(1.0)
+        assert result["is_anomaly"] is False
+        assert result["level"] == "normal"
+
+    def test_spike_volume(self, ti):
+        """Volume at 3x average — is_anomaly=True, level='spike'."""
+        volumes = [1000.0] * 19 + [3000.0]
+        result = ti.volume_anomaly(volumes)
+        assert result["ratio"] > 2.5
+        assert result["is_anomaly"] is True
+        assert result["level"] == "spike"
+        assert result["z_score"] > 0
+
+    def test_elevated_volume(self, ti):
+        """Volume at ~2x average — is_anomaly=True, level='elevated'."""
+        # 30 bars of 1000, then latest bar at 2200 → ratio = 2200/avg ≈ 2.06
+        # avg of last 20 = (19*1000 + 2200)/20 = 1060, ratio = 2200/1060 ≈ 2.08
+        volumes = [1000.0] * 29 + [2200.0]
+        result = ti.volume_anomaly(volumes)
+        assert result["ratio"] >= 2.0
+        assert result["is_anomaly"] is True
+        assert result["level"] == "elevated"
+
+    def test_insufficient_data(self, ti):
+        """Returns safe defaults with too few bars."""
+        result = ti.volume_anomaly([1000.0] * 5, period=20)
+        assert result["ratio"] == 1.0
+        assert result["is_anomaly"] is False
+        assert result["level"] == "normal"
