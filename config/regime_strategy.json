@@ -3,40 +3,45 @@
     "position_size_mult": 1.2,
     "max_hold_hours_mult": 1.5,
     "take_profit_mult": 1.3,
-    "min_confidence": 0.4,
+    "min_confidence": 0.3,
     "prefer_direction": "long",
-    "direction_bonus": 0.1
+    "direction_bonus": 0.1,
+    "holding_period_hours": 168
   },
   "TRENDING_DOWN": {
     "position_size_mult": 1.2,
     "max_hold_hours_mult": 1.5,
     "take_profit_mult": 1.3,
-    "min_confidence": 0.4,
+    "min_confidence": 0.3,
     "prefer_direction": "short",
-    "direction_bonus": 0.1
+    "direction_bonus": 0.1,
+    "holding_period_hours": 168
   },
   "RANGING": {
     "position_size_mult": 0.7,
     "max_hold_hours_mult": 0.7,
     "take_profit_mult": 0.8,
-    "min_confidence": 0.55,
+    "min_confidence": 0.45,
     "prefer_direction": null,
-    "direction_bonus": 0.0
+    "direction_bonus": 0.0,
+    "holding_period_hours": 48
   },
   "HIGH_VOLATILITY": {
     "position_size_mult": 0.5,
     "max_hold_hours_mult": 0.5,
     "take_profit_mult": 1.5,
-    "min_confidence": 0.6,
+    "min_confidence": 0.5,
     "prefer_direction": null,
-    "direction_bonus": 0.0
+    "direction_bonus": 0.0,
+    "holding_period_hours": 24
   },
   "LOW_VOLATILITY": {
     "position_size_mult": 1.0,
     "max_hold_hours_mult": 1.0,
     "take_profit_mult": 1.0,
-    "min_confidence": 0.45,
+    "min_confidence": 0.35,
     "prefer_direction": null,
-    "direction_bonus": 0.0
+    "direction_bonus": 0.0,
+    "holding_period_hours": 96
   }
 }

@@ -98,27 +98,27 @@ class TestShouldTrade:
         selector = RegimeStrategySelector()
         should, reason = selector.should_trade("HIGH_VOLATILITY", 0.3)
         assert should is False
-        assert "0.60" in reason  # min_confidence for HIGH_VOLATILITY
+        assert "0.50" in reason  # min_confidence for HIGH_VOLATILITY
 
     def test_direction_bonus_can_push_above_threshold(self):
         """Test that direction bonus helps meet the threshold."""
         selector = RegimeStrategySelector()
-        # TRENDING_UP min_confidence=0.4, direction_bonus=0.1
-        # Confidence 0.35 + bonus 0.1 = 0.45 >= 0.4
-        should, _ = selector.should_trade("TRENDING_UP", 0.35, "long")
+        # TRENDING_UP min_confidence=0.3, direction_bonus=0.1
+        # Confidence 0.25 + bonus 0.1 = 0.35 >= 0.3
+        should, _ = selector.should_trade("TRENDING_UP", 0.25, "long")
         assert should is True
 
     def test_direction_bonus_not_applied_wrong_direction(self):
         selector = RegimeStrategySelector()
-        # TRENDING_UP min_confidence=0.4, but short gets no bonus
-        # 0.35 < 0.4
-        should, _ = selector.should_trade("TRENDING_UP", 0.35, "short")
+        # TRENDING_UP min_confidence=0.3, but short gets no bonus
+        # 0.25 < 0.3
+        should, _ = selector.should_trade("TRENDING_UP", 0.25, "short")
         assert should is False
 
     def test_ranging_higher_threshold(self):
         selector = RegimeStrategySelector()
-        should, _ = selector.should_trade("RANGING", 0.5)
-        assert should is False  # 0.5 < 0.55
+        should, _ = selector.should_trade("RANGING", 0.4)
+        assert should is False  # 0.4 < 0.45
 
     def test_ranging_passes_at_threshold(self):
         selector = RegimeStrategySelector()

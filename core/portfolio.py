@@ -46,6 +46,7 @@ class PortfolioState:
         self.total_wins: int = 0
         self.total_losses: int = 0
         self.halted: bool = False
+        self.permanent_halt: bool = False
         self.last_updated: str = datetime.utcnow().isoformat()
         self._friction = None
 
@@ -71,6 +72,7 @@ class PortfolioState:
                 "total_wins": self.total_wins,
                 "total_losses": self.total_losses,
                 "halted": self.halted,
+                "permanent_halt": self.permanent_halt,
                 "last_updated": self.last_updated,
             }
 
@@ -312,6 +314,7 @@ class PortfolioState:
                 self.total_wins = state.get("total_wins", 0)
                 self.total_losses = state.get("total_losses", 0)
                 self.halted = state.get("halted", False)
+                self.permanent_halt = state.get("permanent_halt", False)
                 self.last_updated = state.get(
                     "last_updated", datetime.utcnow().isoformat()
                 )

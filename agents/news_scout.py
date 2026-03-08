@@ -51,6 +51,21 @@ Ticker mapping rules:
 - Ethereum, ETH news → ETH
 - Cross-market or unclear → MACRO
 
+Reflexivity detection — for EACH article, also return:
+- "reflexivity_flag": true/false — is this article part of a self-reinforcing narrative loop?
+- "reflexivity_stage": one of "none", "forming", "peak", "reversal"
+
+Detect reflexivity when:
+- The article cites recent price action as evidence for the thesis ("BTC surged 10%, indicating strong momentum")
+- Multiple sources are repeating the same narrative verbatim (echo chamber)
+- Language has shifted from cautious ("may", "could") to extrapolative ("will continue", "inevitable")
+- Price predictions are circular — the price is high because it will go higher
+
+Stage definitions:
+- "forming": narrative is building but not yet consensus (early believers)
+- "peak": everyone agrees, price cited as proof, extrapolation language dominant
+- "reversal": cracks appearing — the narrative is being questioned after price moved
+
 Rules:
 - IMPORTANT: We trade ALL asset classes — crypto, stocks, ETFs, gold, silver. Classify articles for ALL relevant assets, not just crypto. Earnings, guidance, analyst upgrades/downgrades, sector rotation, and company-specific news are actionable for equities.
 - If 3+ outlets report the same story, it's already priced in — set already_priced_in=true and downgrade signal_strength by 0.2
@@ -172,6 +187,26 @@ class NewsScout:
                 if not any(word in combined_text for word in ["said", "announced", "confirmed"]):
                     strength -= 0.3
 
+            # Reflexivity adjustment
+            reflexivity_flag = sig.get("reflexivity_flag", False)
+            reflexivity_stage = sig.get("reflexivity_stage", "none")
+            if reflexivity_flag and reflexivity_stage != "none":
+                if reflexivity_stage == "forming":
+                    strength += 0.10
+                    log.info("Reflexivity FORMING detected for %s — boosting signal +0.10", asset)
+                elif reflexivity_stage == "peak":
+                    strength -= 0.15
+                    log.info("Reflexivity PEAK detected for %s — crowded trade warning, reducing signal -0.15", asset)
+                elif reflexivity_stage == "reversal":
+                    # Flip direction
+                    current_sentiment = sig.get("sentiment", "neutral")
+                    if current_sentiment == "bullish":
+                        sig["sentiment"] = "bearish"
+                    elif current_sentiment == "bearish":
+                        sig["sentiment"] = "bullish"
+                    strength += 0.10
+                    log.info("Reflexivity REVERSAL detected for %s — flipping signal direction, boosting +0.10", asset)
+
             # Clamp
             strength = max(0.0, min(1.0, strength))
 
@@ -214,6 +249,8 @@ class NewsScout:
                     confidence_in_classification=sig.get(
                         "confidence_in_classification", strength
                     ),
+                    reflexivity_flag=reflexivity_flag,
+                    reflexivity_stage=reflexivity_stage if reflexivity_flag else "none",
                 )
                 alerts.append(alert)
                 self._recent_headlines.append(headline_lower)

@@ -38,6 +38,7 @@ from core.schemas import (
     TradeThesis,
     Verdict,
 )
+from core.self_optimizer import SelfOptimizer
 from core.confidence_calibrator import ConfidenceCalibrator
 from core.earnings_calendar import EarningsCalendar
 from core.regime_classifier import RegimeClassifier
@@ -61,12 +62,14 @@ class TradingPipeline:
         executor: Executor,
         telegram: TelegramNotifier,
         llm_client: LLMClient | None = None,
+        optimizer: SelfOptimizer | None = None,
     ):
         self._portfolio = portfolio
         self._risk = risk_manager
         self._executor = executor
         self._telegram = telegram
         self._llm = llm_client or LLMClient()
+        self._optimizer = optimizer
 
         # Create agents with shared LLM client
         self._news_scout = NewsScout(llm_client=self._llm)
@@ -801,6 +804,9 @@ class TradingPipeline:
             except Exception as e:
                 log.error("Stop-loss journal record failed: %s", e)
 
+            # Extract principles from this closed trade
+            self._extract_trade_principles(trade_id)
+
             try:
                 self._telegram.send_alert(
                     f"STOP-LOSS HIT: {direction.upper()} {asset}\n"
@@ -960,6 +966,9 @@ class TradingPipeline:
             except Exception as e:
                 log.error("Take-profit journal record failed: %s", e)
 
+            # Extract principles from this closed trade
+            self._extract_trade_principles(trade_id)
+
             try:
                 self._telegram.send_alert(
                     f"TAKE-PROFIT HIT: {direction.upper()} {asset}\n"
@@ -992,11 +1001,31 @@ class TradingPipeline:
 
     _MAX_HOLDING_HOURS = 72
 
+    def _get_holding_period_for_asset(self, asset: str) -> float:
+        """Get regime-dependent holding period for an asset.
+
+        Uses the regime classifier to determine market regime, then looks up
+        holding_period_hours from regime_strategy config. Falls back to 72 hours.
+        """
+        try:
+            regime_info = self._regime_classifier.classify(asset)
+            regime = regime_info.get("regime", "")
+        except Exception:
+            return float(self._MAX_HOLDING_HOURS)
+
+        preset = self._regime_strategy._presets.get(regime, {})
+        base_hours = preset.get("holding_period_hours", self._MAX_HOLDING_HOURS)
+        mult = preset.get("max_hold_hours_mult", 1.0)
+        return float(base_hours) * float(mult)
+
     def check_holding_periods(self) -> list[dict[str, Any]]:
-        """Force-close positions held longer than 72 hours.
+        """Force-close positions exceeding regime-dependent holding periods.
 
         Called every 5 minutes from the heartbeat cycle.
         Tier 0: pure Python, no LLM, deterministic.
+        Holding periods vary by regime:
+          TRENDING_UP/DOWN: 168h, RANGING: 48h, HIGH_VOL: 24h, LOW_VOL: 96h
+        Falls back to 72h if regime data unavailable.
         """
         if self._portfolio.halted:
             log.info("System halted — skipping holding period check")
@@ -1019,17 +1048,19 @@ class TradingPipeline:
             except (ValueError, TypeError):
                 continue
 
+            asset = pos.get("asset", "")
+            max_hours = self._get_holding_period_for_asset(asset)
+
             holding_hours = (now - opened_at).total_seconds() / 3600
-            if holding_hours < self._MAX_HOLDING_HOURS:
+            if holding_hours < max_hours:
                 continue
 
-            asset = pos.get("asset", "")
             trade_id = pos.get("trade_id", "")
             direction = pos.get("direction", "long")
 
             log.warning(
-                "TIME EXIT: %s %s (trade %s) — held %.1f hours (max %d)",
-                direction.upper(), asset, trade_id, holding_hours, self._MAX_HOLDING_HOURS,
+                "TIME EXIT: %s %s (trade %s) — held %.1f hours (max %.0f)",
+                direction.upper(), asset, trade_id, holding_hours, max_hours,
             )
 
             # Fetch current price for P&L calculation
@@ -1112,9 +1143,12 @@ class TradingPipeline:
             except Exception as e:
                 log.error("Time exit journal record failed: %s", e)
 
+            # Extract principles from this closed trade
+            self._extract_trade_principles(trade_id)
+
             try:
                 self._telegram.send_alert(
-                    f"TIME EXIT (72h): {direction.upper()} {asset}\n"
+                    f"TIME EXIT ({max_hours:.0f}h): {direction.upper()} {asset}\n"
                     f"Entry: ${entry_price:.2f} | Exit: ${exit_price:.2f}\n"
                     f"Held: {holding_hours:.1f}h | P&L: ${pnl:.2f}"
                 )
@@ -1162,6 +1196,277 @@ class TradingPipeline:
             )
         except Exception as e:
             log.error("Broker health check failed: %s", e)
+
+    def _extract_trade_principles(self, trade_id: str) -> None:
+        """Extract and save principles from a closed trade via the SelfOptimizer.
+
+        Non-blocking: failures are logged but do not affect trade flow.
+        """
+        if not self._optimizer:
+            return
+
+        try:
+            # Load the closed trade record from the journal
+            journal_path = Path(__file__).resolve().parent.parent / "data" / "trade_journal.json"
+            if not journal_path.exists():
+                return
+            with open(journal_path) as f:
+                entries = json.load(f)
+
+            closed_trade = None
+            for entry in entries:
+                if isinstance(entry, dict) and entry.get("trade_id") == trade_id and entry.get("outcome"):
+                    closed_trade = entry
+                    break
+
+            if not closed_trade:
+                return
+
+            principles = self._optimizer.extract_principles(closed_trade)
+            if principles:
+                self._optimizer.save_principles(principles, closed_trade)
+        except Exception as e:
+            log.error("Principle extraction failed for %s: %s", trade_id, e)
+
+    def run_proactive_scan(self) -> list[dict[str, Any]]:
+        """Proactively evaluate all assets for trade setups based on technicals + regime.
+
+        Runs independently of news — constructs synthetic signals from current
+        regime, technicals, and price action for each unheld asset. This solves
+        the undertrading problem by generating trade candidates 3x daily.
+        """
+        if self._portfolio.halted:
+            log.warning("System halted — skipping proactive scan")
+            return []
+
+        try:
+            from core.asset_registry import get_tradeable_assets
+
+            log.info("Starting proactive scan...")
+            event_bus.emit("pipeline", "proactive_scan_start", {})
+
+            assets = get_tradeable_assets()
+            held_assets = {
+                pos.get("asset") for pos in self._portfolio.open_positions
+            }
+
+            # Filter out assets we already hold
+            scan_assets = [a for a in assets if a not in held_assets]
+            log.info(
+                "Proactive scan: %d assets to scan (%d held, skipped)",
+                len(scan_assets), len(held_assets),
+            )
+
+            if not scan_assets:
+                log.info("Proactive scan: no assets to scan (all held)")
+                event_bus.emit("pipeline", "proactive_scan_complete", {
+                    "scanned": 0, "signals": 0, "theses": 0,
+                })
+                return []
+
+            mdf = MarketDataFetcher()
+            ti = self._analyst._ti
+            signals: list[SignalAlert] = []
+
+            for asset in scan_assets:
+                try:
+                    signal = self._build_proactive_signal(asset, mdf, ti)
+                    if signal is not None:
+                        signal.signal_id = (
+                            f"sig_{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')}"
+                            f"_{asset}_{uuid.uuid4().hex[:4]}"
+                        )
+                        self._signal_tracker.record_signal(
+                            signal.signal_id, signal, source_type="proactive_scan"
+                        )
+                        signals.append(signal)
+                except Exception as e:
+                    log.warning("Proactive scan: failed for %s: %s", asset, e)
+
+            log.info(
+                "Proactive scan produced %d signals from %d assets",
+                len(signals), len(scan_assets),
+            )
+
+            results: list[dict[str, Any]] = []
+            if signals:
+                results = self.process_signals(signals)
+
+            theses_count = sum(
+                1 for r in results if r.get("outcome") not in ("no_trade", "pre_filtered", "analyst_error")
+            )
+            executed_count = sum(1 for r in results if r.get("outcome") == "executed")
+
+            event_bus.emit("pipeline", "proactive_scan_complete", {
+                "scanned": len(scan_assets),
+                "signals": len(signals),
+                "theses": theses_count,
+                "executed": executed_count,
+            })
+
+            log.info(
+                "Proactive scan complete: %d scanned, %d signals, %d theses, %d executed",
+                len(scan_assets), len(signals), theses_count, executed_count,
+            )
+
+            return results
+        except Exception as e:
+            log.error("Proactive scan failed: %s", e)
+            self._telegram.send_alert(f"Proactive scan error: {e}")
+            return []
+
+    def _build_proactive_signal(
+        self, asset: str, mdf: MarketDataFetcher, ti: "TechnicalIndicators"
+    ) -> SignalAlert | None:
+        """Build a synthetic SignalAlert from technicals + regime for one asset.
+
+        Returns None if insufficient data to form a meaningful signal.
+        """
+        # 1. Fetch OHLCV data
+        ohlcv = mdf.get_ohlcv(asset, period="3mo", interval="1d")
+        if not ohlcv or len(ohlcv) < 30:
+            log.debug("Proactive scan: insufficient OHLCV for %s (%d bars)", asset, len(ohlcv) if ohlcv else 0)
+            return None
+
+        closes = [bar["close"] for bar in ohlcv]
+        highs = [bar["high"] for bar in ohlcv]
+        lows = [bar["low"] for bar in ohlcv]
+        volumes = [bar["volume"] for bar in ohlcv]
+
+        current_price = closes[-1] if closes else 0
+        if current_price <= 0:
+            return None
+
+        # 2. Compute technicals
+        rsi = ti.rsi(closes)
+        macd = ti.macd(closes)
+        bollinger = ti.bollinger_bands(closes)
+        atr = ti.atr(highs, lows, closes)
+        sma_50 = ti.sma(closes, 50)
+        sma_200 = ti.sma(closes, 200)
+
+        vol_avg_20 = sum(volumes[-20:]) / 20 if len(volumes) >= 20 else 0
+        vol_ratio = round(volumes[-1] / vol_avg_20, 2) if vol_avg_20 > 0 else 0
+
+        # 3. Compute price action (% changes)
+        def pct_change(n: int) -> float:
+            if len(closes) > n and closes[-n - 1] > 0:
+                return round((closes[-1] - closes[-n - 1]) / closes[-n - 1] * 100, 2)
+            return 0.0
+
+        change_1d = pct_change(1)
+        change_5d = pct_change(5)
+        change_20d = pct_change(20)
+
+        # 4. Classify regime
+        regime_info = self._regime_classifier.classify_from_ohlcv(ohlcv)
+        regime = regime_info.get("regime", "RANGING")
+
+        # 5. Get regime strategy recommendation
+        regime_preset = self._regime_strategy.presets.get(regime, {})
+        preferred_dir = regime_preset.get("prefer_direction")
+        min_confidence = regime_preset.get("min_confidence", 0.5)
+
+        # 6. Build MACD crossover description
+        macd_desc = "neutral"
+        if macd["histogram"] > 0:
+            macd_desc = "bullish (MACD above signal)"
+        elif macd["histogram"] < 0:
+            macd_desc = "bearish (MACD below signal)"
+
+        # 7. Bollinger position
+        bb_pos = "middle"
+        if bollinger["upper"] > 0 and bollinger["lower"] > 0:
+            if current_price > bollinger["upper"]:
+                bb_pos = "above upper band (overbought)"
+            elif current_price < bollinger["lower"]:
+                bb_pos = "below lower band (oversold)"
+            elif bollinger["middle"] > 0:
+                bb_pct = (current_price - bollinger["lower"]) / (bollinger["upper"] - bollinger["lower"]) if (bollinger["upper"] - bollinger["lower"]) > 0 else 0.5
+                if bb_pct > 0.7:
+                    bb_pos = "near upper band"
+                elif bb_pct < 0.3:
+                    bb_pos = "near lower band"
+
+        # 8. Determine signal sentiment from technicals
+        bullish_count = 0
+        bearish_count = 0
+
+        if rsi < 30:
+            bullish_count += 1  # Oversold = potential reversal up
+        elif rsi > 70:
+            bearish_count += 1  # Overbought = potential reversal down
+        elif rsi < 45:
+            bearish_count += 1
+        elif rsi > 55:
+            bullish_count += 1
+
+        if macd["histogram"] > 0:
+            bullish_count += 1
+        elif macd["histogram"] < 0:
+            bearish_count += 1
+
+        if sma_50 > 0 and sma_200 > 0:
+            if sma_50 > sma_200:
+                bullish_count += 1  # Golden cross territory
+            else:
+                bearish_count += 1  # Death cross territory
+
+        if change_5d > 1:
+            bullish_count += 1
+        elif change_5d < -1:
+            bearish_count += 1
+
+        if bullish_count > bearish_count:
+            sentiment = "bullish"
+        elif bearish_count > bullish_count:
+            sentiment = "bearish"
+        else:
+            sentiment = "neutral"
+
+        # 9. Calculate signal strength from regime confidence + technical clarity
+        tech_clarity = abs(bullish_count - bearish_count) / max(bullish_count + bearish_count, 1)
+        regime_conf = regime_info.get("confidence", 0.5)
+        signal_strength = round(min(1.0, (tech_clarity * 0.6 + regime_conf * 0.4)), 2)
+        signal_strength = max(signal_strength, 0.3)  # Floor at 0.3
+
+        # 10. Build the headline with key information
+        direction_hint = preferred_dir or ("long" if sentiment == "bullish" else "short" if sentiment == "bearish" else "neutral")
+        headline = (
+            f"Proactive: {asset} {regime} RSI={rsi:.0f} "
+            f"{change_5d:+.1f}% 5d"
+        )[:100]
+
+        # 11. Build rich new_information text for MarketAnalyst
+        sma_cross = ""
+        if sma_50 > 0 and sma_200 > 0:
+            if sma_50 > sma_200:
+                sma_cross = "SMA50 above SMA200 (bullish structure)"
+            else:
+                sma_cross = "SMA50 below SMA200 (bearish structure)"
+
+        new_info = (
+            f"Proactive technical scan for {asset}. "
+            f"Regime: {regime} (confidence {regime_conf:.0%}). "
+            f"RSI(14): {rsi:.1f}. MACD: {macd_desc}. "
+            f"Bollinger: {bb_pos}, bandwidth {bollinger['bandwidth']:.4f}. "
+            f"ATR(14): {atr:.2f}. Volume vs 20d avg: {vol_ratio:.2f}x. "
+            f"Price action: 1d {change_1d:+.1f}%, 5d {change_5d:+.1f}%, 20d {change_20d:+.1f}%. "
+            f"{sma_cross}. "
+            f"Regime strategy: prefer {preferred_dir or 'any'} direction, min confidence {min_confidence:.0%}."
+        )
+
+        return SignalAlert(
+            asset=asset,
+            signal_strength=signal_strength,
+            headline=headline,
+            sentiment=sentiment,
+            category="technical",
+            source="proactive_scan",
+            new_information=new_info,
+            urgency="medium",
+            confidence_in_classification=signal_strength,
+        )
 
     def _backfill_legacy_positions(self) -> None:
         """Patch legacy positions missing timestamp_open, take_profit_price, or MAE/MFE.
@@ -1231,6 +1536,10 @@ class TradingPipeline:
     def run_circuit_breaker_check(self, market_data: dict[str, Any] | None = None) -> None:
         """Run circuit breaker check against current portfolio state."""
         if self._portfolio.halted:
+            # If permanent halt is set, never auto-recover
+            if getattr(self._portfolio, "permanent_halt", False):
+                log.info("PERMANENT HALT active — manual restart required")
+                return
             self._try_auto_recovery()
             return
 
@@ -1251,6 +1560,32 @@ class TradingPipeline:
                     "reasoning": getattr(decision, "reasoning", ""),
                 })
                 self._circuit_breaker.execute_decision(decision)
+
+                # Permanent kill switch: in live mode, if drawdown exceeds threshold, halt permanently
+                is_paper = getattr(self._executor, "paper_mode", True)
+                perm_threshold = self._risk_params.get("permanent_halt_drawdown_pct", 25.0)
+                drawdown = portfolio_state.get("drawdown_from_peak_pct", 0)
+                if not is_paper and drawdown >= perm_threshold:
+                    self._portfolio.halted = True
+                    self._portfolio.permanent_halt = True
+                    self._portfolio.persist()
+                    log.critical(
+                        "PERMANENT HALT: Portfolio drawdown %.1f%% exceeded %.1f%%. "
+                        "Manual review required. Auto-recovery DISABLED.",
+                        drawdown, perm_threshold,
+                    )
+                    event_bus.emit("circuit_breaker", "permanent_halt", {
+                        "drawdown_pct": drawdown,
+                        "threshold_pct": perm_threshold,
+                    })
+                    try:
+                        self._telegram.send_alert(
+                            f"PERMANENT HALT: Portfolio drawdown exceeded {perm_threshold:.0f}%.\n"
+                            f"Current drawdown: {drawdown:.1f}%\n"
+                            f"Manual review required. Auto-recovery DISABLED."
+                        )
+                    except Exception:
+                        pass
         except Exception as e:
             log.error("Circuit breaker check failed: %s", e)
 

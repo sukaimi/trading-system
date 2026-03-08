@@ -12,6 +12,7 @@ import os
 from datetime import datetime, timezone
 from typing import Any
 
+from core.llm_client import LLMClient
 from core.logger import setup_logger
 
 log = setup_logger("trading.optimizer")
@@ -21,6 +22,7 @@ DATA_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "data")
 OPT_LOG_FILE = os.path.join(DATA_DIR, "optimization_log.json")
 VERSION_FILE = os.path.join(CONFIG_DIR, "strategy_version.json")
 DIRECTIVES_FILE = os.path.join(DATA_DIR, "data_driven_directives.json")
+PRINCIPLE_LIBRARY_FILE = os.path.join(DATA_DIR, "principle_library.json")
 
 # Learning system data files (read-only — produced by each learning module)
 _LEARNING_FILES = {
@@ -38,9 +40,11 @@ class SelfOptimizer:
         self,
         telegram: Any | None = None,
         portfolio: Any | None = None,
+        llm_client: LLMClient | None = None,
     ):
         self._telegram = telegram
         self._portfolio = portfolio
+        self._llm = llm_client or LLMClient()
 
     def apply_directives(self, weekly_directive: dict[str, Any]) -> list[dict[str, Any]]:
         """Apply parameter changes from a weekly directive.
@@ -419,6 +423,131 @@ class SelfOptimizer:
             log.info("Persisted %d directives to %s", len(directives), DIRECTIVES_FILE)
         except OSError as e:
             log.error("Failed to persist directives: %s", e)
+
+    # ── Principle extraction ───────────────────────────────────────────
+
+    def extract_principles(self, closed_trade: dict[str, Any]) -> list[str]:
+        """Extract generalizable trading principles from a closed trade.
+
+        Calls DeepSeek (Tier 1) to mine 1-3 rules from the trade record.
+        Only runs when there are at least 3 closed trades in the journal.
+
+        Returns:
+            List of principle strings (1-3 items), or empty list on error.
+        """
+        journal_data = self._read_json_safe(
+            os.path.join(DATA_DIR, "trade_journal.json")
+        )
+        if not journal_data or not isinstance(journal_data, list):
+            return []
+
+        closed_count = sum(
+            1 for t in journal_data
+            if isinstance(t, dict) and t.get("outcome") and t.get("trade_id")
+        )
+        if closed_count < 3:
+            log.info("Only %d closed trades — skipping principle extraction (need 3+)", closed_count)
+            return []
+
+        trade_summary = json.dumps(closed_trade, default=str, indent=2)
+        prompt = (
+            "Analyze this completed trade and extract 1-3 generalizable trading principles.\n\n"
+            f"Trade record:\n{trade_summary}\n\n"
+            "Rules for principle extraction:\n"
+            "- Each principle should be a concrete, actionable rule (not generic advice)\n"
+            "- Reference the specific asset, regime, confidence level, or exit reason\n"
+            "- Include the evidence from this trade (PnL, MAE/MFE, hold duration)\n"
+            "- Example: 'When ETH is in HIGH_VOLATILITY regime and initial confidence < 0.5, "
+            "trades have historically lost money. Consider raising the confidence threshold.'\n\n"
+            'Return a JSON array of strings: ["principle 1", "principle 2"]\n'
+            "Return 1-3 principles. If the trade is unremarkable, return just 1."
+        )
+
+        try:
+            result = self._llm.call_deepseek(prompt)
+        except Exception as e:
+            log.error("Principle extraction LLM call failed: %s", e)
+            return []
+
+        if isinstance(result, list):
+            principles = [str(p) for p in result if isinstance(p, str)]
+        elif isinstance(result, dict):
+            if "error" in result:
+                log.warning("Principle extraction LLM error: %s", result["error"])
+                return []
+            principles = result.get("principles", [])
+            if not principles and isinstance(result.get("message"), str):
+                principles = [result["message"]]
+        else:
+            return []
+
+        if principles:
+            log.info("Extracted %d principles from trade %s",
+                     len(principles), closed_trade.get("trade_id", "unknown"))
+
+        return principles[:3]
+
+    def save_principles(
+        self,
+        principles: list[str],
+        closed_trade: dict[str, Any],
+    ) -> None:
+        """Persist extracted principles to data/principle_library.json."""
+        if not principles:
+            return
+
+        os.makedirs(DATA_DIR, exist_ok=True)
+
+        library: list[dict[str, Any]] = []
+        existing = self._read_json_safe(PRINCIPLE_LIBRARY_FILE)
+        if existing and isinstance(existing, list):
+            library = existing
+
+        trade_id = closed_trade.get("trade_id", "unknown")
+        asset = closed_trade.get("asset", "unknown")
+        regime = ""
+        market_ctx = closed_trade.get("market_context")
+        if isinstance(market_ctx, dict):
+            regime = market_ctx.get("regime", "")
+
+        for principle in principles:
+            library.append({
+                "principle": principle,
+                "source_trade_id": trade_id,
+                "extracted_at": datetime.now(timezone.utc).isoformat(),
+                "asset": asset,
+                "regime": regime,
+                "validated": False,
+            })
+
+        try:
+            with open(PRINCIPLE_LIBRARY_FILE, "w") as f:
+                json.dump(library, f, indent=2, default=str)
+            log.info("Saved %d principles to library (total: %d)", len(principles), len(library))
+        except OSError as e:
+            log.error("Failed to save principles: %s", e)
+
+    def get_relevant_principles(self, asset: str, regime: str) -> list[str]:
+        """Return principles relevant to the given asset and regime."""
+        library = self._read_json_safe(PRINCIPLE_LIBRARY_FILE)
+        if not library or not isinstance(library, list):
+            return []
+
+        relevant: list[str] = []
+        for entry in reversed(library):  # Most recent first
+            if not isinstance(entry, dict):
+                continue
+            p_asset = entry.get("asset", "")
+            p_regime = entry.get("regime", "")
+            principle = entry.get("principle", "")
+
+            if not principle:
+                continue
+
+            if p_asset == asset or (regime and p_regime and p_regime == regime):
+                relevant.append(principle)
+
+        return relevant[:10]  # Cap at 10
 
     def _update_config(self, agent: str, param_path: str, value: Any) -> None:
         """Update an agent's dynamic parameters JSON file."""

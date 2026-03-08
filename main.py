@@ -82,7 +82,7 @@ def main():
     log.info("LLM client initialized (mock_mode=%s)", llm_client.mock_mode)
 
     # 5. Initialize Tier 3 modules
-    optimizer = SelfOptimizer(telegram=telegram, portfolio=portfolio)
+    optimizer = SelfOptimizer(telegram=telegram, portfolio=portfolio, llm_client=llm_client)
     log.info("Self-optimizer initialized")
 
     journal = TradeJournal(llm_client=llm_client)
@@ -100,6 +100,7 @@ def main():
         executor=executor,
         telegram=telegram,
         llm_client=llm_client,
+        optimizer=optimizer,
     )
     log.info("Trading pipeline initialized")
 
@@ -159,6 +160,10 @@ def main():
         log.info("Scheduled US Close analysis starting...")
         pipeline.run_scheduled_analysis("us_close")
 
+    def run_proactive_scan():
+        log.info("Scheduled proactive scan starting...")
+        pipeline.run_proactive_scan()
+
     def run_daily_summary():
         log.info("Running daily summary...")
         try:
@@ -198,10 +203,13 @@ def main():
     schedule.every().day.at("00:00").do(_emit_task("asian_open", run_asian_open))            # 08:00 SGT
     schedule.every().day.at("08:00").do(_emit_task("european_overlap", run_european_overlap))  # 16:00 SGT
     schedule.every().day.at("14:00").do(_emit_task("us_close", run_us_close))               # 22:00 SGT
+    schedule.every().day.at("01:00").do(_emit_task("proactive_scan", run_proactive_scan))   # 09:00 SGT — after Asian Open
+    schedule.every().day.at("09:00").do(_emit_task("proactive_scan", run_proactive_scan))   # 17:00 SGT — after European Overlap
+    schedule.every().day.at("15:00").do(_emit_task("proactive_scan", run_proactive_scan))   # 23:00 SGT — after US Close
     schedule.every().day.at("15:00").do(_emit_task("daily_summary", run_daily_summary))     # 23:00 SGT
     schedule.every().day.at("16:00").do(_emit_task("daily_reset", run_daily_reset))         # 00:00 SGT (next day)
     schedule.every().sunday.at("15:00").do(_emit_task("weekly_review", run_weekly_review))  # 23:00 SGT Sunday
-    log.info("All schedules registered (12 total)")
+    log.info("All schedules registered (15 total)")
 
     # Register signal handlers for graceful shutdown
     signal.signal(signal.SIGINT, _shutdown)

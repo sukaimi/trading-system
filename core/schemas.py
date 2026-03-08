@@ -102,6 +102,8 @@ class SignalAlert(BaseModel):
     urgency: Urgency
     already_priced_in: bool = False
     confidence_in_classification: float = Field(ge=0.0, le=1.0)
+    reflexivity_flag: bool = False
+    reflexivity_stage: str = "none"
 
 
 # ── Confirming Signal (sub-model for TradeThesis) ─────────────────────
