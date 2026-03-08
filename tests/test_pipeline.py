@@ -326,7 +326,8 @@ class TestBuildExecutionOrder:
         # stop = 57000, risk = 3000, reward = 3000 * 1.5 = 4500
         # Regime defaults to RANGING (mocked classifier fails), TP mult = 0.8
         # TP distance = 4500 * 0.8 = 3600, TP = 60000 + 3600 = 63600
-        assert order["take_profit"] == 63600.0
+        # But TP floor enforces min R:R 2.0: min_tp = 60000 + 3000*2 = 66000
+        assert order["take_profit"] == 66000.0
         assert order["stop_loss"] == 57000.0
 
     def test_take_profit_calculated_from_rr_short(self, pipeline):
@@ -344,4 +345,5 @@ class TestBuildExecutionOrder:
         # stop = 3500, risk = 300, reward = 300 * 2.0 = 600
         # Regime defaults to RANGING (mocked classifier fails), TP mult = 0.8
         # TP distance = 600 * 0.8 = 480, TP = 3200 - 480 = 2720
-        assert order["take_profit"] == 2720.0
+        # But TP floor enforces min R:R 2.0: min_tp = 3200 - 300*2 = 2600
+        assert order["take_profit"] == 2600.0

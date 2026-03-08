@@ -2237,6 +2237,25 @@ class TradingPipeline:
                 take_profit = round(current_price - tp_distance, 2)
             log.info("Regime TP adjusted [%s] to $%.2f (mult=%.1f)", regime, take_profit, tp_mult)
 
+        # ── Ensure TP respects minimum R:R ratio after regime adjustment ──
+        min_rr = self._risk_params.get("min_reward_risk_ratio", 2.0)
+        if take_profit is not None and stop_loss and current_price > 0 and min_rr > 0:
+            direction = thesis.direction.value
+            if direction == "long":
+                risk = current_price - stop_loss
+                if risk > 0:
+                    min_tp = current_price + (risk * min_rr)
+                    if take_profit < min_tp:
+                        log.info("TP floor applied: %.2f → %.2f (min R:R %.1f:1)", take_profit, min_tp, min_rr)
+                        take_profit = round(min_tp, 2)
+            elif direction == "short":
+                risk = stop_loss - current_price
+                if risk > 0:
+                    min_tp = current_price - (risk * min_rr)
+                    if take_profit > min_tp:
+                        log.info("TP floor applied: %.2f → %.2f (min R:R %.1f:1)", take_profit, min_tp, min_rr)
+                        take_profit = round(min_tp, 2)
+
         # ATR-based position sizing via RiskManager, fall back to %-based
         if current_price > 0 and equity > 0:
             if atr and atr > 0 and hasattr(self._risk, "calculate_position_size"):

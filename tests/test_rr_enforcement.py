@@ -248,3 +248,120 @@ class TestRewardRiskRatioCheck:
         )
         assert passes is False
         assert "invalid risk" in reason
+
+
+# ── Tests for TP floor after regime adjustment ─────────────────────────
+
+
+def _make_pipeline_for_build(risk_params_override: dict | None = None):
+    """Create a TradingPipeline with mocked components for _build_execution_order testing."""
+    pipeline = _make_pipeline(risk_params_override)
+    pipeline._risk = MagicMock()
+    pipeline._risk.check_trade = MagicMock(return_value={"approved": True})
+    pipeline._risk.calculate_position_size = MagicMock(return_value=100.0)
+    pipeline._portfolio = MagicMock()
+    pipeline._portfolio.equity = 10000.0
+    pipeline._portfolio.consecutive_losses = 0
+    pipeline._executor = MagicMock()
+    pipeline._signal_tracker = MagicMock()
+    pipeline._confidence_cal = MagicMock()
+    pipeline._confidence_cal.calibrate_confidence = lambda c: c
+    pipeline._earnings_cal = MagicMock()
+    pipeline._earnings_cal.has_earnings_soon.return_value = False
+    pipeline._session_analyzer = MagicMock()
+    pipeline._session_analyzer.classify_session.return_value = "US"
+    pipeline._session_analyzer.get_session_weight.return_value = 1.0
+    pipeline._regime_classifier = MagicMock()
+    pipeline._regime_classifier.classify.return_value = {
+        "regime": "RANGING", "confidence": 0.7, "indicators": {}
+    }
+    pipeline._regime_classifier.get_initial_stop_multiplier.return_value = 1.0
+    pipeline._regime_strategy = MagicMock()
+    pipeline._regime_strategy.get_adjustments.return_value = {
+        "position_size_mult": 0.7,
+        "take_profit_mult": 0.8,
+        "stop_loss_mult": 1.0,
+        "trailing_stop_mult": 1.5,
+        "confidence_adjustment": 0.0,
+    }
+    pipeline._regime_strategy.should_trade.return_value = (True, "ok")
+    return pipeline
+
+
+class TestTPFloorAfterRegimeAdjustment:
+    """Tests that the TP floor ensures take-profit never drops below min R:R
+    after regime-based TP multiplier is applied."""
+
+    def test_long_tp_floor_kicks_in(self):
+        """Long: regime adjustment pushes TP below min R:R, floor corrects it."""
+        from core.schemas import TradeThesis, Direction, DevilsVerdict, Verdict
+
+        pipeline = _make_pipeline_for_build({"min_reward_risk_ratio": 2.0})
+
+        thesis = TradeThesis(
+            asset="BTC", direction=Direction.LONG, confidence=0.8,
+            thesis="test", suggested_position_pct=5.0,
+            invalidation_level="62000", risk_reward_ratio="1.5",
+            supporting_data={"current_price": 65000},
+        )
+        verdict = DevilsVerdict(
+            original_thesis_id="x", verdict=Verdict.APPROVED,
+            confidence_adjusted=0.75,
+        )
+        order = pipeline._build_execution_order(thesis, verdict)
+        # stop = 62000, risk = 3000
+        # Raw TP: reward = 3000 * 1.5 = 4500, TP = 69500
+        # Regime 0.8x: TP distance = 4500 * 0.8 = 3600, TP = 68600
+        # R:R = 3600/3000 = 1.2 — below min 2.0
+        # TP floor: min_tp = 65000 + 3000*2 = 71000
+        assert order["take_profit"] == 71000.0
+        assert order["stop_loss"] == 62000.0
+
+    def test_short_tp_floor_kicks_in(self):
+        """Short: regime adjustment pushes TP too close to entry, floor corrects."""
+        from core.schemas import TradeThesis, Direction, DevilsVerdict, Verdict
+
+        pipeline = _make_pipeline_for_build({"min_reward_risk_ratio": 2.0})
+
+        thesis = TradeThesis(
+            asset="ETH", direction=Direction.SHORT, confidence=0.8,
+            thesis="test", suggested_position_pct=5.0,
+            invalidation_level="3500", risk_reward_ratio="1.5",
+            supporting_data={"current_price": 3200},
+        )
+        verdict = DevilsVerdict(
+            original_thesis_id="x", verdict=Verdict.APPROVED,
+            confidence_adjusted=0.75,
+        )
+        order = pipeline._build_execution_order(thesis, verdict)
+        # stop = 3500, risk = 300
+        # Raw TP: reward = 300 * 1.5 = 450, TP = 2750
+        # Regime 0.8x: TP distance = 450 * 0.8 = 360, TP = 2840
+        # R:R = 360/300 = 1.2 — below min 2.0
+        # TP floor: min_tp = 3200 - 300*2 = 2600
+        assert order["take_profit"] == 2600.0
+        assert order["stop_loss"] == 3500.0
+
+    def test_long_tp_above_floor_not_adjusted(self):
+        """Long: TP already above min R:R after regime adjustment, no floor applied."""
+        from core.schemas import TradeThesis, Direction, DevilsVerdict, Verdict
+
+        pipeline = _make_pipeline_for_build({"min_reward_risk_ratio": 1.0})
+
+        thesis = TradeThesis(
+            asset="BTC", direction=Direction.LONG, confidence=0.8,
+            thesis="test", suggested_position_pct=5.0,
+            invalidation_level="62000", risk_reward_ratio="1.5",
+            supporting_data={"current_price": 65000},
+        )
+        verdict = DevilsVerdict(
+            original_thesis_id="x", verdict=Verdict.APPROVED,
+            confidence_adjusted=0.75,
+        )
+        order = pipeline._build_execution_order(thesis, verdict)
+        # stop = 62000, risk = 3000
+        # Raw TP: reward = 3000 * 1.5 = 4500, TP = 69500
+        # Regime 0.8x: TP distance = 4500 * 0.8 = 3600, TP = 68600
+        # R:R = 3600/3000 = 1.2 — above min 1.0, no floor
+        assert order["take_profit"] == 68600.0
+        assert order["stop_loss"] == 62000.0
