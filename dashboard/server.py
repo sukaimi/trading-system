@@ -37,13 +37,15 @@ app.mount(
 _portfolio: Any = None
 _heartbeat: Any = None
 _cost_tracker: Any = None
+_pipeline: Any = None
 
 
-def _set_refs(portfolio: Any, heartbeat: Any, cost_tracker: Any) -> None:
-    global _portfolio, _heartbeat, _cost_tracker
+def _set_refs(portfolio: Any, heartbeat: Any, cost_tracker: Any, pipeline: Any = None) -> None:
+    global _portfolio, _heartbeat, _cost_tracker, _pipeline
     _portfolio = portfolio
     _heartbeat = heartbeat
     _cost_tracker = cost_tracker
+    _pipeline = pipeline
 
 
 # ── REST endpoints — initial data load ─────────────────────────────────
@@ -175,6 +177,20 @@ async def get_signal_accuracy() -> dict[str, Any]:
             "recent": data[-10:] if data else [],
         }
     return {"total_signals": 0, "executed": 0, "closed": 0, "wins": 0, "losses": 0, "win_rate": 0.0, "recent": []}
+
+
+@app.get("/api/signal-funnel")
+async def get_signal_funnel() -> dict[str, Any]:
+    """Return signal pipeline funnel stats."""
+    if _pipeline and hasattr(_pipeline, "get_funnel_stats"):
+        return _pipeline.get_funnel_stats()
+    return {
+        "signals_generated": 0, "pre_filtered": 0, "analyst_no_trade": 0,
+        "analyst_errors": 0, "devil_killed": 0, "risk_rejected": 0, "executed": 0,
+        "last_reset": "", "past_prefilter": 0, "past_analyst": 0, "past_devil": 0,
+        "past_risk": 0, "prefilter_pass_rate": 0.0, "analyst_pass_rate": 0.0,
+        "devil_pass_rate": 0.0, "risk_pass_rate": 0.0, "execution_rate": 0.0,
+    }
 
 
 @app.get("/api/earnings")
@@ -408,9 +424,10 @@ def start_dashboard(
     cost_tracker: Any,
     host: str = "127.0.0.1",
     port: int = 8080,
+    pipeline: Any = None,
 ) -> threading.Thread:
     """Start the dashboard server in a background daemon thread."""
-    _set_refs(portfolio, heartbeat, cost_tracker)
+    _set_refs(portfolio, heartbeat, cost_tracker, pipeline=pipeline)
 
     def _run() -> None:
         loop = asyncio.new_event_loop()

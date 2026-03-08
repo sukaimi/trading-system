@@ -1,5 +1,5 @@
 {
-  "version": 46,
-  "last_updated": "2026-03-08T12:00:00.000000",
+  "version": 47,
+  "last_updated": "2026-03-08T02:50:38.516267",
   "notes": "v46: Proactive scan, regime holding periods, reflexivity detection, principle extraction, kill switch"
 }

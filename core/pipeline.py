@@ -95,6 +95,19 @@ class TradingPipeline:
         self._friction = TradingFriction(paper_mode=getattr(executor, "paper_mode", True))
         self._portfolio.set_friction(self._friction)
 
+        # Signal funnel stats — in-memory counters, reset daily
+        self._funnel_stats: dict[str, Any] = {
+            "signals_generated": 0,
+            "pre_filtered": 0,
+            "analyst_no_trade": 0,
+            "analyst_errors": 0,
+            "devil_killed": 0,
+            "risk_rejected": 0,
+            "rr_rejected": 0,
+            "executed": 0,
+            "last_reset": datetime.now(timezone.utc).isoformat(),
+        }
+
         # Load risk params for auto-recovery cooldown + default stop-loss
         self._risk_params: dict[str, Any] = {}
         try:
@@ -106,6 +119,47 @@ class TradingPipeline:
 
         # Backfill any legacy positions missing fields
         self._backfill_legacy_positions()
+
+    def _maybe_reset_funnel_stats(self) -> None:
+        """Reset funnel stats if the day has changed (UTC)."""
+        last = self._funnel_stats.get("last_reset", "")
+        today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        if not last.startswith(today):
+            self._funnel_stats = {
+                "signals_generated": 0,
+                "pre_filtered": 0,
+                "analyst_no_trade": 0,
+                "analyst_errors": 0,
+                "devil_killed": 0,
+                "risk_rejected": 0,
+                "rr_rejected": 0,
+                "executed": 0,
+                "last_reset": datetime.now(timezone.utc).isoformat(),
+            }
+
+    def get_funnel_stats(self) -> dict[str, Any]:
+        """Return funnel stats with computed pass-through rates."""
+        self._maybe_reset_funnel_stats()
+        s = dict(self._funnel_stats)
+        generated = s["signals_generated"]
+
+        past_prefilter = generated - s["pre_filtered"]
+        past_analyst = past_prefilter - s["analyst_no_trade"] - s["analyst_errors"]
+        past_devil = past_analyst - s["devil_killed"]
+        past_risk = past_devil - s["risk_rejected"] - s["rr_rejected"]
+
+        s["past_prefilter"] = max(past_prefilter, 0)
+        s["past_analyst"] = max(past_analyst, 0)
+        s["past_devil"] = max(past_devil, 0)
+        s["past_risk"] = max(past_risk, 0)
+
+        s["prefilter_pass_rate"] = round(past_prefilter / generated * 100, 1) if generated > 0 else 0.0
+        s["analyst_pass_rate"] = round(past_analyst / past_prefilter * 100, 1) if past_prefilter > 0 else 0.0
+        s["devil_pass_rate"] = round(past_devil / past_analyst * 100, 1) if past_analyst > 0 else 0.0
+        s["risk_pass_rate"] = round(past_risk / past_devil * 100, 1) if past_devil > 0 else 0.0
+        s["execution_rate"] = round(s["executed"] / generated * 100, 1) if generated > 0 else 0.0
+
+        return s
 
     def run_chart_scan(self) -> list[SignalAlert]:
         """Run a technical chart scan and process any signals found.
@@ -182,6 +236,9 @@ class TradingPipeline:
         (RiskManager + Executor + Portfolio update) runs serially to protect
         thread-unsafe portfolio state and executor.
         """
+        self._maybe_reset_funnel_stats()
+        self._funnel_stats["signals_generated"] += len(signals)
+
         # Phase 1: Run analysis in parallel (Analyst → Chart → Devil)
         analysis_results: list[dict[str, Any]] = []
         with ThreadPoolExecutor(max_workers=3) as pool:
@@ -242,6 +299,7 @@ class TradingPipeline:
             )
             result["outcome"] = "pre_filtered"
             result["filter_reason"] = "already_holding"
+            self._funnel_stats["pre_filtered"] += 1
             if signal.signal_id:
                 self._signal_tracker.record_outcome(
                     signal.signal_id, "pre_filtered"
@@ -268,6 +326,7 @@ class TradingPipeline:
             log.error("Market Analyst failed for %s: %s", signal.asset, e)
             result["outcome"] = "analyst_error"
             result["error"] = str(e)
+            self._funnel_stats["analyst_errors"] += 1
             if signal.signal_id:
                 self._signal_tracker.record_outcome(signal.signal_id, "analyst_error")
             return {"signal": signal, "result": result, "thesis": None, "verdict": None}
@@ -280,6 +339,7 @@ class TradingPipeline:
             except Exception as e:
                 log.error("Journal record_no_trade failed: %s", e)
             result["outcome"] = "no_trade"
+            self._funnel_stats["analyst_no_trade"] += 1
             if signal.signal_id:
                 self._signal_tracker.record_outcome(signal.signal_id, "no_trade")
             return {"signal": signal, "result": result, "thesis": None, "verdict": None}
@@ -364,6 +424,7 @@ class TradingPipeline:
                 thesis=thesis.thesis,
             )
             result["outcome"] = "killed"
+            self._funnel_stats["devil_killed"] += 1
             if signal.signal_id:
                 self._signal_tracker.record_outcome(
                     signal.signal_id, "killed",
@@ -416,6 +477,7 @@ class TradingPipeline:
             )
             result["outcome"] = "risk_rejected"
             result["risk_reason"] = reason
+            self._funnel_stats["risk_rejected"] += 1
             if signal.signal_id:
                 self._signal_tracker.record_outcome(
                     signal.signal_id, "risk_rejected",
@@ -424,6 +486,36 @@ class TradingPipeline:
             return result
 
         order_to_execute = adjusted or exec_order
+
+        # Step 3b: Reward:Risk ratio check
+        current_price = thesis.supporting_data.get("current_price", 0)
+        rr_passes, rr_ratio, rr_reason = self._check_reward_risk_ratio(
+            order_to_execute, current_price, thesis.direction.value
+        )
+        if not rr_passes:
+            log.warning(
+                "Trade rejected by R:R check for %s: %s", signal.asset, rr_reason
+            )
+            self._phantom.record_missed(
+                asset=thesis.asset,
+                direction=thesis.direction.value,
+                confidence=thesis.confidence,
+                killed_by="rr_check",
+                reason=rr_reason,
+                entry_price=current_price,
+                suggested_position_pct=thesis.suggested_position_pct,
+                thesis=thesis.thesis,
+            )
+            result["outcome"] = "rr_rejected"
+            result["rr_reason"] = rr_reason
+            result["rr_ratio"] = rr_ratio
+            self._funnel_stats["rr_rejected"] += 1
+            if signal.signal_id:
+                self._signal_tracker.record_outcome(
+                    signal.signal_id, "rr_rejected",
+                    killed_by="rr_check", kill_reason=rr_reason,
+                )
+            return result
 
         # Step 4: Execute
         try:
@@ -497,6 +589,7 @@ class TradingPipeline:
 
         result["outcome"] = "executed"
         result["fill_price"] = confirmation.get("fill_price", 0.0)
+        self._funnel_stats["executed"] += 1
         if signal.signal_id:
             self._signal_tracker.record_outcome(
                 signal.signal_id, "executed",
@@ -1673,6 +1766,8 @@ class TradingPipeline:
 
     def _process_thesis(self, thesis: TradeThesis) -> dict[str, Any]:
         """Process a thesis through Chart → Devil → Risk → Execute → Journal."""
+        self._maybe_reset_funnel_stats()
+        self._funnel_stats["signals_generated"] += 1
         result: dict[str, Any] = {
             "asset": thesis.asset,
             "thesis": thesis.thesis,
@@ -1710,6 +1805,7 @@ class TradingPipeline:
                 thesis=thesis.thesis,
             )
             result["outcome"] = "killed"
+            self._funnel_stats["devil_killed"] += 1
             return result
 
         # Risk check
@@ -1740,9 +1836,35 @@ class TradingPipeline:
             )
             result["outcome"] = "risk_rejected"
             result["risk_reason"] = reason
+            self._funnel_stats["risk_rejected"] += 1
             return result
 
         order_to_execute = adjusted or exec_order
+
+        # Reward:Risk ratio check
+        current_price = thesis.supporting_data.get("current_price", 0)
+        rr_passes, rr_ratio, rr_reason = self._check_reward_risk_ratio(
+            order_to_execute, current_price, thesis.direction.value
+        )
+        if not rr_passes:
+            log.warning(
+                "Trade rejected by R:R check for %s: %s", thesis.asset, rr_reason
+            )
+            self._phantom.record_missed(
+                asset=thesis.asset,
+                direction=thesis.direction.value,
+                confidence=thesis.confidence,
+                killed_by="rr_check",
+                reason=rr_reason,
+                entry_price=current_price,
+                suggested_position_pct=thesis.suggested_position_pct,
+                thesis=thesis.thesis,
+            )
+            result["outcome"] = "rr_rejected"
+            result["rr_reason"] = rr_reason
+            result["rr_ratio"] = rr_ratio
+            self._funnel_stats["rr_rejected"] += 1
+            return result
 
         # Execute
         try:
@@ -1800,6 +1922,7 @@ class TradingPipeline:
 
         result["outcome"] = "executed"
         result["fill_price"] = confirmation.get("fill_price", 0.0)
+        self._funnel_stats["executed"] += 1
         return result
 
     def _enrich_with_chart(self, thesis: TradeThesis) -> TradeThesis:
@@ -1858,6 +1981,43 @@ class TradingPipeline:
                 present=False, description=f"Chart analysis error: {e}"
             )
         return thesis
+
+    def _check_reward_risk_ratio(
+        self, order: dict[str, Any], current_price: float, direction: str
+    ) -> tuple[bool, float, str]:
+        """Check if trade meets minimum reward:risk ratio.
+
+        Returns (passes, ratio, reason).
+        If stop_loss or take_profit or current_price is missing/zero, skip the check.
+        """
+        stop_loss = order.get("stop_loss")
+        take_profit = order.get("take_profit")
+        min_rr = self._risk_params.get("min_reward_risk_ratio", 2.0)
+
+        if not stop_loss or not take_profit or not current_price:
+            return True, 0.0, "skipped (missing stop_loss, take_profit, or entry_price)"
+
+        if direction == "long":
+            risk = current_price - stop_loss
+            reward = take_profit - current_price
+        else:
+            risk = stop_loss - current_price
+            reward = current_price - take_profit
+
+        if risk <= 0:
+            return False, 0.0, f"invalid risk: stop_loss ({stop_loss}) at or beyond entry ({current_price})"
+
+        ratio = reward / risk
+
+        if ratio < min_rr:
+            return (
+                False,
+                round(ratio, 2),
+                f"R:R {ratio:.2f}:1 below minimum {min_rr:.1f}:1 "
+                f"(risk=${risk:.2f}, reward=${reward:.2f})",
+            )
+
+        return True, round(ratio, 2), "passed"
 
     @staticmethod
     def _calculate_ev(

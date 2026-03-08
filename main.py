@@ -222,7 +222,7 @@ def main():
     # 12. Start dashboard server
     dashboard_port = int(os.getenv("DASHBOARD_PORT", "8080"))
     dashboard_host = os.getenv("DASHBOARD_HOST", "127.0.0.1")
-    start_dashboard(portfolio, heartbeat, cost_tracker, host=dashboard_host, port=dashboard_port)
+    start_dashboard(portfolio, heartbeat, cost_tracker, host=dashboard_host, port=dashboard_port, pipeline=pipeline)
 
     # 13. Pre-flight API connectivity check
     if not llm_client.mock_mode:

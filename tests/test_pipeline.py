@@ -139,7 +139,7 @@ class TestProcessSingleSignal:
         thesis = TradeThesis(
             asset="BTC", direction=Direction.LONG, confidence=0.7,
             thesis="test", suggested_position_pct=5.0,
-            invalidation_level="62000",
+            invalidation_level="50000",
             supporting_data={"current_price": 65000},
         )
         verdict = DevilsVerdict(
@@ -153,6 +153,8 @@ class TestProcessSingleSignal:
         pipeline._journal = MagicMock()
         pipeline._executor = MagicMock()
         pipeline._executor.execute.return_value = {"type": "order_error", "error": "IBKR not connected"}
+        # Bypass R:R check — this test is about execution errors, not R:R
+        pipeline._check_reward_risk_ratio = MagicMock(return_value=(True, 3.0, "passed"))
 
         result = pipeline.process_single_signal(btc_signal)
         assert result["outcome"] == "execution_error"
@@ -161,7 +163,7 @@ class TestProcessSingleSignal:
         thesis = TradeThesis(
             asset="BTC", direction=Direction.LONG, confidence=0.7,
             thesis="test", suggested_position_pct=5.0,
-            invalidation_level="62000",
+            invalidation_level="50000",
             supporting_data={"current_price": 65000},
         )
         verdict = DevilsVerdict(
@@ -174,6 +176,8 @@ class TestProcessSingleSignal:
         pipeline._devil.challenge.return_value = verdict
         pipeline._journal = MagicMock()
         pipeline._executor = MagicMock()
+        # Bypass R:R check — this test is about successful execution flow
+        pipeline._check_reward_risk_ratio = MagicMock(return_value=(True, 3.0, "passed"))
         pipeline._executor.execute.return_value = {
             "type": "order_confirmation",
             "order_id": 123,
