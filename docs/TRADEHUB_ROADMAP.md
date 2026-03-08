@@ -103,8 +103,8 @@ disagreement patterns is unique to multi-agent architectures.
 
 ### Week 2: Data-Driven Tuning (v1.5)
 - [ ] Tune parameters using Week 1 trade data
-- [ ] Add reflexivity detection to NewsScout prompt (Edge 1)
-- [ ] Begin principle extraction in SelfOptimizer (Edge 4)
+- [x] Add reflexivity detection to NewsScout prompt (Edge 1) — DONE
+- [x] Begin principle extraction in SelfOptimizer (Edge 4) — DONE
 - [ ] Raise `max_position_pct` to 7%, `max_open_positions` to 8 (if stable)
 - [ ] Target: 10-15 cumulative live trades
 
@@ -138,21 +138,21 @@ disagreement patterns is unique to multi-agent architectures.
 
 | # | Suggestion | Complexity | Impact |
 |---|-----------|-----------|--------|
-| 1 | **Proactive scan method** — system evaluates all 14 assets 3x/day regardless of news | Medium | HIGHEST — solves undertaking |
+| 1 | [x] **Proactive scan method** — system evaluates all 14 assets 3x/day regardless of news (DONE - v52) | Medium | HIGHEST — solves undertaking |
 | 2 | **Test live execution paths** — Coinbase + Alpaca round-trip verification | Simple | Blocking — must work |
 | 3 | **Adjust risk params for $200** — max_position 5%, max_open 5 for Week 1 | Simple | Safety net |
-| 4 | **Lower confidence thresholds** — bias toward action during learning phase | Simple | HIGH — generates data |
-| 5 | **Permanent kill switch** — 25% drawdown = permanent halt (no auto-recovery) | Simple | Safety net |
+| 4 | [x] **Lower confidence thresholds** — bias toward action during learning phase (DONE - v52) | Simple | HIGH — generates data |
+| 5 | [x] **Permanent kill switch** — 25% drawdown = permanent halt in live mode (DONE - v52) | Simple | Safety net |
 
 ### Tier 2: HIGH (Weeks 2-3 — Early Live)
 
 | # | Suggestion | Complexity | Impact |
 |---|-----------|-----------|--------|
-| 6 | **Reflexivity detection in NewsScout** (Edge 1) | Medium | Alpha source |
-| 7 | **Principle extraction in SelfOptimizer** (Edge 4) | Medium | Compounding edge |
-| 8 | **Regime-dependent holding periods** — replace flat 72h | Medium | Lets winners run |
-| 9 | **Signal funnel dashboard** — visualise the decision pipeline | Simple | Diagnostic |
-| 10 | **Asymmetric R:R enforcement** — reject trades with R:R < 1:2 | Medium | Quality filter |
+| 6 | [x] **Reflexivity detection in NewsScout** (Edge 1) — forming/peak/reversal detection (DONE - v52) | Medium | Alpha source |
+| 7 | [x] **Principle extraction in SelfOptimizer** (Edge 4) — extract_principles() after each trade exit (DONE - v52) | Medium | Compounding edge |
+| 8 | [x] **Regime-dependent holding periods** — TRENDING=168h, RANGING=48h, HIGH_VOL=24h, LOW_VOL=96h (DONE - v52) | Medium | Lets winners run |
+| 9 | [x] **Signal funnel dashboard** — /api/signal-funnel endpoint + dashboard panel (DONE - v52) | Simple | Diagnostic |
+| 10 | [x] **Asymmetric R:R enforcement** — min 2:1 R:R gate + TP floor (DONE - v52) | Medium | Quality filter |
 
 ### Tier 3: MEDIUM (Week 4+ — After 30 Trades)
 
@@ -233,3 +233,15 @@ disagreement patterns is unique to multi-agent architectures.
 | Warren Buffett | 5.0 | 6.0 | "A magnificent piece of engineering. Now let it trade." |
 | Michael Burry | 4.0 | 5.5 | "Show us the trades." |
 | **BOARD** | — | **6.5** | **Conditional approval. Go live Week 1.** |
+
+---
+
+### Recent Fixes (2026-03-08)
+- [x] Fix gridlock: duplicate asset changed from fatal flaw to soft flag in DA
+- [x] Pre-LLM filter no longer blocks held assets
+- [x] Risk manager allows duplicate assets through (DA handles sizing)
+- [x] Correlation limit relaxed from 0.50 → 0.65
+- [x] TP floor ensures take-profit respects min R:R after regime adjustment
+- [x] Signal funnel + R:R enforcement deployed
+- [x] Strategy version: v52
+- [x] Test count: 627

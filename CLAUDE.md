@@ -28,6 +28,7 @@ Heartbeat (5 min): health check → stop-loss → take-profit → holding period
 News scan (15 min): full pipeline
 Chart scan (4x daily): 00:55, 06:55, 12:55, 18:55 UTC
 3 daily sessions: Asian Open (00:00 UTC), European Overlap (08:00), US Close (14:00)
+Proactive scan (3x daily): 01:00, 09:00, 15:00 UTC (= 09:00, 17:00, 23:00 SGT)
 Weekly: Strategist + SelfOptimizer → rewrite agent params
 Emergency: CircuitBreaker → halt trading → auto-recovery after 6h cooldown
 ```
@@ -47,7 +48,7 @@ trading-system/
 ├── dashboard/       # FastAPI dashboard server + static files (index.html, agent-floor.html, lotus-creature.js)
 ├── config/          # Dynamic params JSON (updated weekly by SelfOptimizer)
 ├── data/            # Persisted state, trade journal, logs, weekly reviews (gitignored)
-├── tests/           # 37 test files, 541 tests (pytest)
+├── tests/           # 39 test files, 627 tests (pytest)
 ├── docs/            # PRD, Lotus spec
 ├── main.py          # Entry point — 12-task scheduler + dashboard
 └── requirements.txt
@@ -71,7 +72,7 @@ trading-system/
 - `dashboard/static/agent-floor.html` — Isometric Agent Trading Floor with live data (served at `/agents`)
 - `dashboard/static/lotus-creature.js` — Animated canvas creature engine (6 stages, currently disabled)
 - `core/risk_manager.py` — Position limits, daily loss caps, drawdown, sector concentration (max 3 per sector)
-- `config/risk_params.json` — Risk limits (max position 7%, daily loss 5%, drawdown 15%, stop-loss 3%, take-profit 5%)
+- `config/risk_params.json` — Risk limits (max position 7%, daily loss 5%, drawdown 15%, stop-loss 3%, take-profit 5%, correlation 0.65, min R:R 2:1)
 
 ## Development Commands
 ```bash
@@ -154,6 +155,8 @@ Optional: DASHBOARD_PORT (default 8080), DASHBOARD_ALLOWED_ORIGINS, GA4_MEASUREM
 - **Tier 1 upgrades**: ATR dynamic stops/TP, ATR position sizing, pre-LLM filter, loss throttling, phantom→DA feedback, signal accuracy→NewsScout feedback, correlation→DA feedback
 - **Tier 2 upgrades**: Trailing stops, regime classifier (5 regimes), adaptive stops, correlation-based position limits, earnings calendar
 - **Tier 3 learning systems**: Adaptive stop optimizer, session analyzer, confidence calibrator, phantom analyzer, regime strategy selector, enhanced SelfOptimizer with data-driven directives
+- **Roadmap features**: Proactive scan (3x/day), regime holding periods, reflexivity detection, principle extraction, kill switch, signal funnel, R:R enforcement (min 2:1), TP floor
+- **Gridlock fix (v52)**: Duplicate asset soft flag, pre-filter removed, correlation 0.50→0.65
 
 ### Pending
 - [ ] **Phase 5: Optimization** — Analyze paper trading data, tune parameters (needs 10-20+ trades)
