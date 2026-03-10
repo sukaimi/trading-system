@@ -58,6 +58,14 @@ async def index() -> HTMLResponse:
     return HTMLResponse(content=content)
 
 
+@app.get("/v3", response_class=HTMLResponse)
+async def dashboard_v3() -> HTMLResponse:
+    html_path = os.path.join(DASHBOARD_DIR, "static", "v3.html")
+    with open(html_path) as f:
+        content = f.read()
+    return HTMLResponse(content=content)
+
+
 @app.get("/agents", response_class=HTMLResponse)
 async def agent_floor() -> HTMLResponse:
     html_path = os.path.join(DASHBOARD_DIR, "static", "agent-floor.html")
@@ -344,8 +352,12 @@ async def websocket_endpoint(ws: WebSocket) -> None:
     queue = event_bus.subscribe()
     try:
         while True:
-            event = await queue.get()
-            await ws.send_json(event)
+            try:
+                event = await asyncio.wait_for(queue.get(), timeout=30.0)
+                await ws.send_json(event)
+            except asyncio.TimeoutError:
+                # No events for 30s — send ping to keep connection alive
+                await ws.send_json({"category": "system", "event_type": "ping"})
     except WebSocketDisconnect:
         pass
     except Exception as e:

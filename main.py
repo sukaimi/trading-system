@@ -9,6 +9,7 @@ Exits cleanly on SIGINT/SIGTERM.
 import os
 import signal
 import sys
+import threading
 import time
 from datetime import datetime
 
@@ -37,16 +38,36 @@ log = setup_logger("trading.main")
 # Global flag for graceful shutdown
 _running = True
 
+# Scheduler watchdog — updated every loop iteration
+_last_scheduler_tick = time.monotonic()
+_last_scheduler_lock = threading.Lock()
+
+# Task timeouts (seconds)
+_TASK_TIMEOUTS: dict[str, int] = {
+    "heartbeat": 120,
+    "news_scan": 300,
+    "chart_scan": 300,
+    "proactive_scan": 600,
+    "asian_open": 600,
+    "european_overlap": 600,
+    "us_close": 600,
+    "weekly_review": 900,
+    "daily_summary": 120,
+    "daily_reset": 120,
+}
+
 
 def _shutdown(signum, frame):
     global _running
     sig_name = signal.Signals(signum).name
     log.info("Received %s — shutting down gracefully", sig_name)
     _running = False
+    # Force exit after 10s if threads don't cooperate
+    threading.Timer(10.0, lambda: os._exit(0)).start()
 
 
 def main():
-    global _running
+    global _running, _last_scheduler_tick
 
     # 1. Load environment
     load_dotenv()
@@ -111,17 +132,38 @@ def main():
     heartbeat = Heartbeat(telegram_notifier=telegram, skip_ibkr=(executor_mode != "ibkr"))
     log.info("Heartbeat monitor initialized")
 
-    # 8. Task wrapper for dashboard event emission
+    # 8. Task wrapper with timeout + dashboard event emission
     def _emit_task(name, func):
+        timeout_sec = _TASK_TIMEOUTS.get(name, 300)
+
         def wrapper():
             event_bus.emit("scheduler", "task_run", {"task_name": name})
             t0 = time.time()
-            try:
-                func()
-            finally:
-                event_bus.emit("scheduler", "task_complete", {
-                    "task_name": name, "duration_sec": round(time.time() - t0, 2),
+            error_container: list = []
+
+            def _target():
+                try:
+                    func()
+                except Exception as e:
+                    error_container.append(e)
+
+            worker = threading.Thread(target=_target, daemon=True)
+            worker.start()
+            worker.join(timeout=timeout_sec)
+
+            duration = round(time.time() - t0, 2)
+            if worker.is_alive():
+                log.error("TASK TIMEOUT: %s exceeded %ds limit (will be abandoned)", name, timeout_sec)
+                event_bus.emit("scheduler", "task_timeout", {
+                    "task_name": name, "timeout_sec": timeout_sec,
                 })
+                telegram.send_alert(f"Task timeout: {name} exceeded {timeout_sec}s — abandoned")
+            elif error_container:
+                log.error("Task %s failed: %s", name, error_container[0])
+            event_bus.emit("scheduler", "task_complete", {
+                "task_name": name, "duration_sec": duration,
+                "timed_out": worker.is_alive(),
+            })
         wrapper.__name__ = name
         return wrapper
 
@@ -130,6 +172,17 @@ def main():
         status = heartbeat.check()
         if not status.all_healthy:
             log.warning("Heartbeat reported failures: %s", status.failures)
+
+        # Scheduler watchdog: check if main loop is still ticking
+        with _last_scheduler_lock:
+            idle_sec = time.monotonic() - _last_scheduler_tick
+        if idle_sec > 1200:  # 20 minutes
+            log.error("SCHEDULER WATCHDOG: main loop idle for %.0fs — forcing restart", idle_sec)
+            telegram.send_alert(f"Scheduler watchdog: idle {idle_sec:.0f}s — restarting")
+            event_bus.emit("watchdog", "scheduler_stuck", {"idle_sec": round(idle_sec)})
+            time.sleep(2)  # Let Telegram/event bus flush
+            os._exit(1)  # systemd will restart us
+
         # Run trailing stop update + stop-loss + take-profit + holding period checks (Tier 0 — deterministic, every 5 min)
         pipeline.update_trailing_stops()
         pipeline.check_stop_losses()
@@ -250,6 +303,9 @@ def main():
     try:
         while _running:
             schedule.run_pending()
+            # Update watchdog tick
+            with _last_scheduler_lock:
+                _last_scheduler_tick = time.monotonic()
             time.sleep(1)
     except KeyboardInterrupt:
         pass
