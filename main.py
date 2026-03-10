@@ -180,6 +180,15 @@ def main():
             log.error("SCHEDULER WATCHDOG: main loop idle for %.0fs — forcing restart", idle_sec)
             telegram.send_alert(f"Scheduler watchdog: idle {idle_sec:.0f}s — restarting")
             event_bus.emit("watchdog", "scheduler_stuck", {"idle_sec": round(idle_sec)})
+            from core import vault_writer
+            vault_writer.write_incident(
+                title=f"Scheduler stuck for {idle_sec:.0f}s",
+                what=f"Scheduler watchdog detected main loop idle for {idle_sec:.0f}s. Forcing restart.",
+                root_cause="Unknown — likely a hung LLM call or network timeout in a scheduled task.",
+                fix="Auto-restart via os._exit(1) — systemd restarts the service.",
+                tags=["system/scheduler", "system/watchdog"],
+                severity="high",
+            )
             time.sleep(2)  # Let Telegram/event bus flush
             os._exit(1)  # systemd will restart us
 

@@ -28,6 +28,7 @@ from core.logger import setup_logger
 from core.phantom_tracker import PhantomTracker
 from core.signal_tracker import SignalAccuracyTracker
 from core.portfolio import PortfolioState
+from core import vault_writer
 from core.risk_manager import RiskManager
 from core.schemas import (
     ConfirmingSignal,
@@ -590,6 +591,17 @@ class TradingPipeline:
             "asset": thesis.asset, "direction": thesis.direction.value,
             "fill_price": confirmation.get("fill_price", 0), "quantity": confirmation.get("quantity", 0),
         })
+
+        # Write trade to memory vault
+        vault_writer.write_trade(
+            asset=thesis.asset,
+            direction=thesis.direction.value,
+            entry_price=confirmation.get("fill_price", 0),
+            thesis=thesis.thesis if hasattr(thesis, "thesis") else signal.headline,
+            verdict=result.get("devil_verdict", ""),
+            outcome="executed",
+        )
+
         log.info(
             "Pipeline complete: %s %s — executed",
             thesis.direction.value,

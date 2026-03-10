@@ -10,6 +10,7 @@ Autonomous multi-agent AI trading system for 14 assets — BTC, ETH, GLDM (gold)
 **PRD**: `docs/TRADING_AGENT_PRD.md`
 **Dashboard**: `https://tradebot.codeandcraft.ai` — Agent Trading Floor + trading dashboard
 **Repo**: `https://github.com/sukaimi/trading-system`
+**Memory Vault**: `/home/trader/trading-memory/` on VPS — Obsidian-style long-term memory (decisions, incidents, trades, learnings). Git-tracked. See vault's `CLAUDE.md` for structure and conventions.
 
 ## Architecture
 
@@ -225,6 +226,12 @@ Optional: DASHBOARD_PORT (default 8080), DASHBOARD_ALLOWED_ORIGINS, GA4_MEASUREM
 - GA tracking: use a separate Google Analytics property per user
 - Data files (`data/`) are per-VPS, no namespacing needed
 
+### Scheduler Resilience
+- **Scheduler is single-threaded**: The `schedule` library runs all tasks on the main thread. If any task (e.g. LLM call) hangs, ALL subsequent tasks are blocked. Fixed with task timeout wrapper — each task runs in a daemon thread with `thread.join(timeout)`. Timeouts: heartbeat 2min, news/chart 5min, proactive/session 10min, weekly 15min.
+- **Scheduler watchdog**: Heartbeat checks `_last_scheduler_tick`. If main loop idle >20min → `os._exit(1)` for systemd restart. Sends Telegram alert before exit.
+- **Graceful shutdown**: SIGTERM starts 10s force-exit timer (`threading.Timer` + `os._exit(0)`) to prevent zombie processes from non-cooperative threads.
+- **WebSocket keepalive**: Server sends `{"category":"system","event_type":"ping"}` every 30s if no events, preventing idle disconnects.
+
 ### Dashboard Scheduler
 - **Countdown showed 0m 0s**: `schedule` library's `job.next_run` is a naive datetime (UTC on VPS). `isoformat()` without `Z` suffix causes JavaScript to parse as browser local time, creating timezone offset. Fixed by appending `Z` in `/api/scheduler` endpoint.
 
@@ -234,6 +241,13 @@ Optional: DASHBOARD_PORT (default 8080), DASHBOARD_ALLOWED_ORIGINS, GA4_MEASUREM
 - **Server-side (Measurement Protocol)**: `core/ga4_tracker.py` subscribes to `event_bus` and forwards trade events to `POST https://www.google-analytics.com/mp/collect`. Events: `trade_signal`, `trade_executed`, `stop_loss_triggered`, `circuit_breaker_triggered`, `system_startup`, `agent_escalation`
 - **Multi-tenant**: Each tenant must have their own GA property. Set `GA4_MEASUREMENT_ID` and `GA4_API_SECRET` in each tenant's `.env`. Do NOT reuse across deployments — traffic will be mixed.
 - **Sukaimi's property**: `G-3DWEFFH8S4` / `1n7J8BhAQiC_R_rXhkvWrA` (set in VPS `.env`, not hardcoded)
+
+## Product Family
+- **Tradebot** = product name (the trading system)
+- **Tradebot Quant** = Sukaimi's instance, always the most advanced. The showcase. (Formerly 'Queen' — renamed to 'Quant' for quantitative trading connotation)
+- **Tradebot Full** = premium customer package (near-identical to Quant)
+- **Tradebot Lite** = budget customer package (fewer features)
+- **TradeHive** = internal-only platform, collects learnings from ALL Tradebot instances (Sukaimi access only)
 
 ## Cost Budget
 - Paper trading: ~$1/month (DeepSeek + Sonnet, Kimi disabled)
