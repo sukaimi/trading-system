@@ -118,7 +118,7 @@ class RiskManager:
                 1 for pos in open_positions
                 if pos.get("asset") in sector_groups[asset_sector]
             )
-            if same_sector_count >= 3:
+            if same_sector_count >= 4:
                 return (
                     False,
                     f"Sector concentration limit: {same_sector_count} {asset_sector} positions already held",
@@ -193,6 +193,8 @@ class RiskManager:
             # Check pairwise correlation with each held asset
             all_correlations: list[float] = []
             for held in held_assets:
+                if held == asset:
+                    continue  # Skip self-correlation (add-to-position allowed by Check 5)
                 held_series = price_series.get(held, [])
                 if len(held_series) < 5:
                     continue
@@ -200,7 +202,7 @@ class RiskManager:
                 abs_corr = abs(corr)
                 all_correlations.append(abs_corr)
 
-                if abs_corr > self.max_correlation:
+                if corr > self.max_correlation:
                     return (
                         False,
                         f"Correlation limit: {asset} vs {held} correlation {corr:.2f} "
