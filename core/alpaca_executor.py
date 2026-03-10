@@ -287,6 +287,104 @@ class AlpacaExecutor:
             log.warning("Failed to get Alpaca price for %s: %s", symbol, e)
         return 0.0
 
+    def get_broker_position(self, asset: str) -> dict[str, Any] | None:
+        """Fetch a single position from Alpaca by asset symbol.
+
+        Returns dict with 'qty' (float), 'side' ('long'/'short'), 'symbol',
+        'current_price', 'unrealized_pl', or None if no position exists.
+        """
+        symbol = _get_alpaca_symbol(asset) or asset
+        # Alpaca API uses URL-encoded symbol (BTC/USD → BTC%2FUSD)
+        encoded = symbol.replace("/", "%2F")
+        try:
+            resp = requests.get(
+                f"{self._base_url}/positions/{encoded}",
+                headers=self._headers,
+                timeout=10,
+            )
+            if resp.status_code == 200:
+                data = resp.json()
+                return {
+                    "symbol": data.get("symbol", symbol),
+                    "qty": abs(float(data.get("qty", 0))),
+                    "side": data.get("side", "long"),
+                    "current_price": float(data.get("current_price", 0)),
+                    "unrealized_pl": float(data.get("unrealized_pl", 0)),
+                }
+            if resp.status_code == 404:
+                # No position on broker
+                return None
+            log.warning("Alpaca position fetch for %s returned %d", symbol, resp.status_code)
+        except Exception as e:
+            log.error("Alpaca position fetch failed for %s: %s", symbol, e)
+        return None
+
+    def close_position(self, asset: str) -> dict[str, Any]:
+        """Close a position using Alpaca's DELETE /positions/{symbol} endpoint.
+
+        This avoids wash trade rejections that occur with counter-direction orders.
+        Returns an order confirmation dict or order error dict.
+        """
+        symbol = _get_alpaca_symbol(asset) or asset
+        encoded = symbol.replace("/", "%2F")
+
+        try:
+            resp = requests.delete(
+                f"{self._base_url}/positions/{encoded}",
+                headers=self._headers,
+                timeout=15,
+            )
+
+            if resp.status_code not in (200, 204):
+                error_msg = resp.text
+                try:
+                    error_msg = resp.json().get("message", resp.text)
+                except Exception:
+                    pass
+                log.error("Alpaca close position rejected for %s: %s", symbol, error_msg)
+                return {
+                    "type": "order_error",
+                    "timestamp": datetime.now(timezone.utc).isoformat(),
+                    "error": f"Alpaca close rejected: {error_msg}",
+                }
+
+            order_data = resp.json()
+            order_id = order_data.get("id", "")
+
+            # Wait for fill
+            fill_price, filled_qty, status = self._wait_for_fill(order_id)
+
+            if status != "filled":
+                log.warning("Alpaca close order %s status: %s", order_id, status)
+                return {
+                    "type": "order_error",
+                    "timestamp": datetime.now(timezone.utc).isoformat(),
+                    "error": f"Close order not filled — status: {status}",
+                }
+
+            log.info(
+                "ALPACA CLOSE: %s %.6f @ $%.2f (order_id=%s)",
+                asset, filled_qty, fill_price, order_id,
+            )
+
+            return {
+                "type": "order_confirmation",
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "order_id": order_id,
+                "asset": asset,
+                "quantity": filled_qty,
+                "fill_price": round(fill_price, 2),
+                "status": "Filled",
+            }
+
+        except requests.RequestException as e:
+            log.error("Alpaca close position API failed for %s: %s", symbol, e)
+            return {
+                "type": "order_error",
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "error": f"Alpaca API error: {e}",
+            }
+
     def get_account_info(self) -> dict[str, Any] | None:
         """Fetch account details from Alpaca (equity, cash, positions)."""
         try:

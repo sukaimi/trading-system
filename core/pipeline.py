@@ -769,6 +769,56 @@ class TradingPipeline:
 
         return updated
 
+    def _resolve_close_quantity(self, asset: str, internal_qty: float, trade_id: str) -> float | None:
+        """Resolve the actual quantity to close by checking the broker.
+
+        Returns the broker's qty if the position exists, or None if the position
+        doesn't exist on the broker (meaning we should just clean up internal state).
+        """
+        from core.alpaca_executor import AlpacaExecutor
+        if not isinstance(self._executor, AlpacaExecutor):
+            return internal_qty
+
+        broker_pos = self._executor.get_broker_position(asset)
+        if broker_pos is None or broker_pos["qty"] == 0:
+            log.warning(
+                "STALE POSITION: %s (trade %s) — internal qty=%.4f but broker has no position. "
+                "Removing from internal portfolio.",
+                asset, trade_id, internal_qty,
+            )
+            return None
+
+        broker_qty = broker_pos["qty"]
+        if abs(broker_qty - internal_qty) > 0.0001:
+            log.warning(
+                "QTY MISMATCH: %s (trade %s) — internal=%.4f, broker=%.4f. Using broker qty.",
+                asset, trade_id, internal_qty, broker_qty,
+            )
+        return broker_qty
+
+    def _close_broker_position(self, asset: str, trade_id: str, quantity: float,
+                                direction: str, thesis_prefix: str) -> dict[str, Any]:
+        """Close a position on the broker, using DELETE endpoint for Alpaca to avoid wash trades.
+
+        Falls back to counter-direction order for non-Alpaca executors.
+        """
+        from core.alpaca_executor import AlpacaExecutor
+        if isinstance(self._executor, AlpacaExecutor):
+            return self._executor.close_position(asset)
+
+        # Non-Alpaca: use counter-direction order
+        close_direction = "short" if direction == "long" else "long"
+        close_order = {
+            "type": "execution_order",
+            "thesis_id": f"{thesis_prefix}_{trade_id}",
+            "asset": asset,
+            "direction": close_direction,
+            "quantity": quantity,
+            "order_type": "market",
+            "stop_loss": None,
+        }
+        return self._executor.execute(close_order)
+
     def check_stop_losses(self) -> list[dict[str, Any]]:
         """Check all open positions against their stop-loss levels.
 
@@ -820,21 +870,18 @@ class TradingPipeline:
                 direction.upper(), asset, trade_id, current_price, stop_price,
             )
 
-            quantity = pos.get("quantity", 0)
-            close_direction = "short" if direction == "long" else "long"
-            close_order = {
-                "type": "execution_order",
-                "thesis_id": f"sl_close_{trade_id}",
-                "asset": asset,
-                "direction": close_direction,
-                "quantity": quantity,
-                "order_type": "market",
-                "stop_loss": None,
-                "position_size_pct": pos.get("position_size_pct", 0),
-            }
+            internal_qty = pos.get("quantity", 0)
+            quantity = self._resolve_close_quantity(asset, internal_qty, trade_id)
+
+            if quantity is None:
+                # Position doesn't exist on broker — clean up internal state
+                self._portfolio.remove_position(trade_id)
+                self._portfolio.record_trade(0)  # no P&L — already closed at broker
+                closed.append({"trade_id": trade_id, "asset": asset, "reason": "stale_position_cleanup"})
+                continue
 
             try:
-                confirmation = self._executor.execute(close_order)
+                confirmation = self._close_broker_position(asset, trade_id, quantity, direction, "sl_close")
             except Exception as e:
                 log.error("Stop-loss close failed for %s: %s", trade_id, e)
                 continue
@@ -982,21 +1029,18 @@ class TradingPipeline:
                 direction.upper(), asset, trade_id, current_price, tp_price,
             )
 
-            quantity = pos.get("quantity", 0)
-            close_direction = "short" if direction == "long" else "long"
-            close_order = {
-                "type": "execution_order",
-                "thesis_id": f"tp_close_{trade_id}",
-                "asset": asset,
-                "direction": close_direction,
-                "quantity": quantity,
-                "order_type": "market",
-                "stop_loss": None,
-                "position_size_pct": pos.get("position_size_pct", 0),
-            }
+            internal_qty = pos.get("quantity", 0)
+            quantity = self._resolve_close_quantity(asset, internal_qty, trade_id)
+
+            if quantity is None:
+                # Position doesn't exist on broker — clean up internal state
+                self._portfolio.remove_position(trade_id)
+                self._portfolio.record_trade(0)
+                closed.append({"trade_id": trade_id, "asset": asset, "reason": "stale_position_cleanup"})
+                continue
 
             try:
-                confirmation = self._executor.execute(close_order)
+                confirmation = self._close_broker_position(asset, trade_id, quantity, direction, "tp_close")
             except Exception as e:
                 log.error("Take-profit close failed for %s: %s", trade_id, e)
                 continue
@@ -1169,21 +1213,18 @@ class TradingPipeline:
                 log.warning("Time exit: no valid price for %s, skipping", asset)
                 continue
 
-            quantity = pos.get("quantity", 0)
-            close_direction = "short" if direction == "long" else "long"
-            close_order = {
-                "type": "execution_order",
-                "thesis_id": f"time_close_{trade_id}",
-                "asset": asset,
-                "direction": close_direction,
-                "quantity": quantity,
-                "order_type": "market",
-                "stop_loss": None,
-                "position_size_pct": pos.get("position_size_pct", 0),
-            }
+            internal_qty = pos.get("quantity", 0)
+            quantity = self._resolve_close_quantity(asset, internal_qty, trade_id)
+
+            if quantity is None:
+                # Position doesn't exist on broker — clean up internal state
+                self._portfolio.remove_position(trade_id)
+                self._portfolio.record_trade(0)
+                closed.append({"trade_id": trade_id, "asset": asset, "reason": "stale_position_cleanup"})
+                continue
 
             try:
-                confirmation = self._executor.execute(close_order)
+                confirmation = self._close_broker_position(asset, trade_id, quantity, direction, "time_close")
             except Exception as e:
                 log.error("Time exit close failed for %s: %s", trade_id, e)
                 continue

@@ -187,6 +187,9 @@ class NewsScout:
                 if not any(word in combined_text for word in ["said", "announced", "confirmed"]):
                     strength -= 0.3
 
+            # Per-signal asset (needed by reflexivity logging below)
+            asset = sig.get("asset", "MACRO")
+
             # Reflexivity adjustment
             reflexivity_flag = sig.get("reflexivity_flag", False)
             reflexivity_stage = sig.get("reflexivity_stage", "none")
@@ -225,7 +228,6 @@ class NewsScout:
                 break
 
             # Per-class quota check — skip signal if class quota full, continue to next
-            asset = sig.get("asset", "MACRO")
             asset_class = self._get_asset_class(asset)
             class_limit = per_class_quotas.get(asset_class, max_per_hour)
             current_count = class_counters.get(asset_class, 0)
