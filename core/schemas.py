@@ -14,7 +14,17 @@ from pydantic import BaseModel, Field, field_validator
 
 
 def _validate_asset(v: str) -> str:
-    """Validate asset symbol against the dynamic registry."""
+    """Validate asset symbol against the dynamic registry.
+
+    For open universe support, this accepts any valid ticker format (1-5 uppercase
+    letters) and attempts dynamic resolution via yfinance if not already known.
+    MACRO is always valid as a non-tradeable signal category.
+    """
+    import re
+    # Fast path: basic format check before hitting the registry
+    v = v.strip().upper()
+    if not re.match(r"^[A-Z]{1,5}(\.[A-Z])?$", v) and v != "MACRO":
+        raise ValueError(f"Invalid ticker format: '{v}'")
     from core.asset_registry import validate_asset  # lazy import to avoid circular
     return validate_asset(v)
 

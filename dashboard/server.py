@@ -287,6 +287,74 @@ async def get_regime_strategy() -> dict[str, Any]:
         return {"presets": {}, "per_asset": {}}
 
 
+@app.get("/api/watchlist")
+async def get_watchlist() -> dict[str, Any]:
+    """Return dynamic watchlist: held positions + recently active signals.
+
+    This powers the dynamic market panel — only shows assets we're
+    currently trading or have recent signals for.
+    """
+    try:
+        from core.asset_registry import get_core_assets, get_registry
+        registry = get_registry()
+
+        # Start with core assets
+        core = get_core_assets()
+
+        # Add held positions (may include dynamic assets)
+        held: list[str] = []
+        if _portfolio:
+            snap = _portfolio.snapshot()
+            held = list({pos.get("asset", "") for pos in snap.get("open_positions", []) if pos.get("asset")})
+
+        # Add recently signaled assets from signal tracker
+        recent_signals: list[str] = []
+        sig_data = _read_json(os.path.join(DATA_DIR, "signal_accuracy.json"), [])
+        if isinstance(sig_data, list):
+            # Last 20 signals, deduplicated
+            seen: set[str] = set()
+            for sig in reversed(sig_data[-50:]):
+                asset = sig.get("asset", "")
+                if asset and asset != "MACRO" and asset not in seen:
+                    recent_signals.append(asset)
+                    seen.add(asset)
+                if len(recent_signals) >= 10:
+                    break
+
+        # Combine: core + held + recent signals (deduplicated, ordered)
+        all_assets: list[str] = []
+        seen_all: set[str] = set()
+        for group in [held, core, recent_signals]:
+            for sym in group:
+                if sym and sym not in seen_all and sym != "MACRO":
+                    all_assets.append(sym)
+                    seen_all.add(sym)
+
+        # Annotate each asset
+        watchlist: list[dict[str, Any]] = []
+        for sym in all_assets:
+            config = registry.get_config(sym)
+            watchlist.append({
+                "symbol": sym,
+                "is_core": registry.is_core(sym),
+                "is_held": sym in held,
+                "is_dynamic": registry.is_dynamic(sym),
+                "type": config.get("type", "stock"),
+                "sector": config.get("sector", ""),
+            })
+
+        return {
+            "assets": watchlist,
+            "core_count": len(core),
+            "held_count": len(held),
+            "dynamic_count": len([w for w in watchlist if w["is_dynamic"]]),
+            "total": len(watchlist),
+        }
+    except Exception as e:
+        log.warning("Watchlist fetch failed: %s", e)
+        return {"assets": [], "core_count": 0, "held_count": 0, "dynamic_count": 0, "total": 0}
+
+
 @app.get("/api/events/recent")
 async def get_recent_events() -> list[dict[str, Any]]:
     return event_bus.get_recent(50)
@@ -300,6 +368,10 @@ async def get_config() -> dict[str, Any]:
         data = _read_json(path, None)
         if data is not None:
             result[name] = data
+    # Include dynamic assets if any exist
+    dynamic_data = _read_json(os.path.join(DATA_DIR, "dynamic_assets.json"), None)
+    if dynamic_data:
+        result["dynamic_assets"] = dynamic_data
     return result
 
 
@@ -380,25 +452,34 @@ def _read_json(path: str, default: Any) -> Any:
     return default
 
 
+def _get_active_symbols() -> list[str]:
+    """Get symbols to fetch data for: core + any held dynamic assets."""
+    try:
+        from core.asset_registry import get_core_assets, get_registry
+        symbols = list(get_core_assets())
+        # Add held dynamic assets
+        if _portfolio:
+            snap = _portfolio.snapshot()
+            for pos in snap.get("open_positions", []):
+                asset = pos.get("asset", "")
+                if asset and asset not in symbols:
+                    symbols.append(asset)
+        return symbols
+    except Exception:
+        return ["BTC", "ETH", "GLDM", "SLV"]
+
+
 def _fetch_regime() -> dict[str, Any]:
     from core.regime_classifier import RegimeClassifier
     from tools.market_data import MarketDataFetcher
-    try:
-        from core.asset_registry import get_tradeable_assets
-        symbols = get_tradeable_assets()
-    except Exception:
-        symbols = ["BTC", "ETH", "GLDM", "SLV"]
+    symbols = _get_active_symbols()
     classifier = RegimeClassifier(market_data_fetcher=MarketDataFetcher())
     return classifier.classify_portfolio(symbols)
 
 
 def _fetch_price_history() -> dict[str, Any]:
     from tools.market_data import MarketDataFetcher
-    try:
-        from core.asset_registry import get_tradeable_assets
-        symbols = get_tradeable_assets()
-    except Exception:
-        symbols = ["BTC", "ETH", "GLDM", "SLV"]
+    symbols = _get_active_symbols()
     mdf = MarketDataFetcher()
     result: dict[str, Any] = {}
     for symbol in symbols:
@@ -413,11 +494,7 @@ def _fetch_price_history() -> dict[str, Any]:
 
 def _fetch_market_prices() -> dict[str, Any]:
     from tools.market_data import MarketDataFetcher
-    try:
-        from core.asset_registry import get_tradeable_assets
-        symbols = get_tradeable_assets()
-    except Exception:
-        symbols = ["BTC", "ETH", "GLDM", "SLV"]
+    symbols = _get_active_symbols()
     mdf = MarketDataFetcher()
     prices: dict[str, Any] = {}
     for symbol in symbols:

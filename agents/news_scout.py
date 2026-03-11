@@ -16,7 +16,7 @@ from typing import Any
 
 from core.llm_client import LLMClient
 from core.logger import setup_logger
-from core.asset_registry import get_registry, get_tradeable_assets
+from core.asset_registry import get_registry, get_tradeable_assets, get_core_assets
 from core.schemas import Sentiment, SignalAlert, SignalCategory, Urgency
 from tools.news_fetcher import NewsFetcher
 
@@ -32,7 +32,7 @@ You NEVER forward recycled opinion pieces. You ONLY escalate when you detect gen
 CLASSIFY_PROMPT = """Analyze the following news articles and classify each as a trading signal.
 
 For each article that contains genuinely actionable information, return a JSON object with:
-- "asset": one of {valid_assets}
+- "asset": the stock/ETF/crypto ticker symbol (e.g. "AAPL", "BTC", "SPY", "GLDM"). You may use ANY valid US-listed ticker.
 - "signal_strength": 0.0-1.0 (0.8-1.0=CRITICAL, 0.5-0.7=NOTABLE, 0.3-0.4=MONITOR, <0.3=NOISE)
 - "headline": max 100 chars summary
 - "sentiment": "bullish", "bearish", "neutral", or "uncertain"
@@ -42,14 +42,18 @@ For each article that contains genuinely actionable information, return a JSON o
 - "already_priced_in": true/false
 - "confidence_in_classification": 0.0-1.0
 
+Core assets we actively monitor: {core_assets}
+
 Ticker mapping rules:
-- Company-specific news (earnings, guidance, analyst upgrades/downgrades) → map to the specific ticker: AAPL, NVDA, TSLA, AMZN, or META
+- Company-specific news → map to the EXACT ticker (e.g. AAPL, NVDA, TSLA, AMZN, META, GOOG, MSFT, JPM, etc.)
+- If the article mentions a specific company by name, use its stock ticker — you are NOT limited to our core assets
 - Fed, interest rate, broad market, index, or S&P 500 news → SPY
 - Gold, precious metals, gold ETF news → GLDM
 - Silver news → SLV
 - Bitcoin, BTC news → BTC
 - Ethereum, ETH news → ETH
 - Cross-market or unclear → MACRO
+- Only use tickers for US-listed stocks/ETFs with >$1B market cap
 
 Reflexivity detection — for EACH article, also return:
 - "reflexivity_flag": true/false — is this article part of a self-reinforcing narrative loop?
@@ -68,6 +72,7 @@ Stage definitions:
 
 Rules:
 - IMPORTANT: We trade ALL asset classes — crypto, stocks, ETFs, gold, silver. Classify articles for ALL relevant assets, not just crypto. Earnings, guidance, analyst upgrades/downgrades, sector rotation, and company-specific news are actionable for equities.
+- You may discover opportunities in ANY US-listed stock with >$1B market cap. Do not limit yourself to our core assets.
 - If 3+ outlets report the same story, it's already priced in — set already_priced_in=true and downgrade signal_strength by 0.2
 - If article uses "could/might/may" without citing a named source, downgrade by 0.3
 - For scheduled events, only flag if actual deviates from consensus by >10%
@@ -119,8 +124,8 @@ class NewsScout:
             for i, a in enumerate(shuffled[:30])  # Limit to 30 articles per batch
         )
 
-        valid_assets = ", ".join(f'"{a}"' for a in get_tradeable_assets() + ["MACRO"])
-        prompt = CLASSIFY_PROMPT.format(articles=article_text, valid_assets=valid_assets)
+        core_assets = ", ".join(f'"{a}"' for a in get_core_assets() + ["MACRO"])
+        prompt = CLASSIFY_PROMPT.format(articles=article_text, core_assets=core_assets)
 
         # Append historical signal accuracy context
         accuracy_context = self._load_signal_accuracy_context()

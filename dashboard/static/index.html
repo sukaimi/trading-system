@@ -352,13 +352,57 @@ h1, h2, h3 { font-family: 'Source Serif 4', Georgia, serif; font-weight: 600; }
   align-items: center;
   padding: 12px 0;
   border-bottom: 1px solid var(--border);
-  transition: background 0.6s ease;
+  transition: background 0.6s ease, opacity 0.4s ease, max-height 0.4s ease, padding 0.4s ease;
+  max-height: 80px;
+  overflow: hidden;
+  opacity: 1;
+}
+.market-item.item-entering {
+  animation: slideIn 0.3s ease-out forwards;
+}
+.market-item.item-exiting {
+  opacity: 0;
+  max-height: 0;
+  padding: 0;
+  border-bottom-width: 0;
 }
 .market-item:last-child { border-bottom: none; }
+.market-item .symbol-group {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 60px;
+}
 .market-item .symbol {
   font-weight: 600;
   font-size: 13px;
-  min-width: 48px;
+}
+.market-item .badge-held {
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--success);
+  flex-shrink: 0;
+}
+.market-item .badge-dynamic {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 8px;
+  font-weight: 700;
+  color: var(--chart-1);
+  background: oklch(0.646 0.222 41.116 / 15%);
+  border-radius: 3px;
+  padding: 0 3px;
+  line-height: 14px;
+  flex-shrink: 0;
+  letter-spacing: 0.02em;
+}
+.market-item.is-held {
+  border-left: 2px solid var(--success);
+  padding-left: 8px;
+  margin-left: -10px;
 }
 .market-item .price {
   font-family: 'JetBrains Mono', monospace;
@@ -381,6 +425,13 @@ h1, h2, h3 { font-family: 'Source Serif 4', Georgia, serif; font-weight: 600; }
 .market-item .change-badge.flat { background: var(--card-alt); color: var(--muted-foreground); }
 .market-item.flash-up   { background: var(--long-bg); }
 .market-item.flash-down { background: var(--short-bg); }
+.market-strip-counter {
+  font-size: 10px;
+  color: var(--muted-foreground);
+  font-weight: 400;
+  margin-left: auto;
+  font-family: 'JetBrains Mono', monospace;
+}
 
 .market-spark {
   width: 60px;
@@ -1149,7 +1200,7 @@ body, .card, .status-bar, .halted-banner {
 
     <!-- Market Strip -->
     <div class="card market-strip" id="market-strip">
-      <div class="card-label"><span class="indicator" style="background:var(--success)"></span> Market</div>
+      <div class="card-label"><span class="indicator" style="background:var(--success)"></span> Market <span class="market-strip-counter" id="market-counter"></span></div>
       <div id="market-list"><div class="empty">Loading prices...</div></div>
     </div>
 
@@ -1365,6 +1416,7 @@ const state = {
     resetTimer: null,
   },
   funnel: null,
+  watchlist: null,
 };
 
 const PIPELINE_STAGES = ['news', 'techscan', 'analyst', 'chart', 'devil', 'risk', 'execute'];
@@ -1419,7 +1471,7 @@ function glowPanel(id, color, duration) {
 // ── Fetch all data ─────────────────────────────────────────────
 async function fetchAll() {
   try {
-    const [port, mkt, hist, eq, events, sched, costs, hb, journal, funnel] = await Promise.all([
+    const [port, mkt, hist, eq, events, sched, costs, hb, journal, funnel, watchlist] = await Promise.all([
       fetch('/api/portfolio').then(r => r.ok ? r.json() : null).catch(() => null),
       fetch('/api/market').then(r => r.ok ? r.json() : null).catch(() => null),
       fetch('/api/price-history').then(r => r.ok ? r.json() : null).catch(() => null),
@@ -1430,7 +1482,9 @@ async function fetchAll() {
       fetch('/api/heartbeat').then(r => r.ok ? r.json() : null).catch(() => null),
       fetch('/api/journal').then(r => r.ok ? r.json() : null).catch(() => null),
       fetch('/api/signal-funnel').then(r => r.ok ? r.json() : null).catch(() => null),
+      fetch('/api/watchlist').then(r => r.ok ? r.json() : null).catch(() => null),
     ]);
+    if (watchlist) state.watchlist = watchlist;
     if (port) state.portfolio = port;
     if (mkt) {
       if (state.market) state.prevMarket = { ...state.market };
@@ -1501,9 +1555,60 @@ function renderMarket() {
   if (!m) return;
   const hist = state.priceHistory || {};
   const prev = state.prevMarket || {};
+  const wl = state.watchlist;
+
+  // Build ordered asset list: held first, then core, then dynamic
+  // If watchlist not loaded yet, fall back to all market keys
+  let assets;
+  if (wl && wl.assets && wl.assets.length > 0) {
+    // Sort: held first, then core, then dynamic-only; within each group alphabetical
+    const sorted = [...wl.assets].sort((a, b) => {
+      // held assets first
+      if (a.is_held !== b.is_held) return a.is_held ? -1 : 1;
+      // then core before dynamic
+      if (a.is_core !== b.is_core) return a.is_core ? -1 : 1;
+      return a.symbol.localeCompare(b.symbol);
+    });
+    assets = sorted.map(a => ({
+      symbol: a.symbol,
+      is_held: a.is_held,
+      is_dynamic: a.is_dynamic,
+      is_core: a.is_core,
+      type: a.type || '',
+      sector: a.sector || '',
+    }));
+  } else {
+    // Fallback: use all market keys as core assets
+    assets = Object.keys(m).map(sym => ({
+      symbol: sym, is_held: false, is_dynamic: false, is_core: true, type: '', sector: '',
+    }));
+  }
+
+  // Update counter
+  const counterEl = document.getElementById('market-counter');
+  if (counterEl && wl) {
+    const heldCount = wl.held_count || 0;
+    const dynCount = wl.dynamic_count || 0;
+    const parts = [];
+    if (heldCount > 0) parts.push(heldCount + ' held');
+    if (dynCount > 0) parts.push(dynCount + ' discovered');
+    counterEl.textContent = assets.length + ' assets' + (parts.length ? ' \u00b7 ' + parts.join(', ') : '');
+  } else if (counterEl) {
+    counterEl.textContent = '';
+  }
+
+  const listEl = document.getElementById('market-list');
+
+  // Track which symbols are currently displayed for transition
+  const existingItems = listEl.querySelectorAll('.market-item[data-symbol]');
+  const existingSymbols = new Set();
+  existingItems.forEach(el => existingSymbols.add(el.getAttribute('data-symbol')));
+  const newSymbols = new Set(assets.filter(a => m[a.symbol]).map(a => a.symbol));
 
   let html = '';
-  for (const [sym, price] of Object.entries(m)) {
+  for (const asset of assets) {
+    const sym = asset.symbol;
+    const price = m[sym];
     if (!price) continue;
 
     // Use price history for change calculation (more reliable than prev poll)
@@ -1524,6 +1629,12 @@ function renderMarket() {
       flashCls = price > prev[sym] ? ' flash-up' : ' flash-down';
     }
 
+    // Held indicator
+    const heldCls = asset.is_held ? ' is-held' : '';
+
+    // Entering animation for newly added assets
+    const enterCls = (!existingSymbols.has(sym) && existingSymbols.size > 0) ? ' item-entering' : '';
+
     // Sparkline
     let spark = '';
     if (data && data.length > 1) {
@@ -1536,14 +1647,19 @@ function renderMarket() {
       spark = `<svg class="market-spark" viewBox="0 0 ${w} ${h}" preserveAspectRatio="none"><polyline points="${pts}" style="stroke:${color}"/></svg>`;
     }
 
-    html += `<div class="market-item${flashCls}">
-      <span class="symbol">${esc(sym)}</span>
+    // Badges
+    let badges = '';
+    if (asset.is_held) badges += '<span class="badge-held" title="Held position"></span>';
+    if (asset.is_dynamic) badges += '<span class="badge-dynamic" title="Discovered asset">NEW</span>';
+
+    html += `<div class="market-item${flashCls}${heldCls}${enterCls}" data-symbol="${esc(sym)}">
+      <span class="symbol-group"><span class="symbol">${esc(sym)}</span>${badges}</span>
       ${spark}
       <span class="price mono">${fmtPrice(price)}</span>
       <span class="change-badge ${cls}">${csign}${changePct.toFixed(2)}%</span>
     </div>`;
   }
-  document.getElementById('market-list').innerHTML = html || '<div class="empty">No market data</div>';
+  listEl.innerHTML = html || '<div class="empty">No market data</div>';
 
   // Remove flash classes after animation
   setTimeout(() => {
@@ -1551,6 +1667,13 @@ function renderMarket() {
       el.classList.remove('flash-up', 'flash-down');
     });
   }, 600);
+
+  // Remove entering class after animation completes
+  setTimeout(() => {
+    document.querySelectorAll('.item-entering').forEach(el => {
+      el.classList.remove('item-entering');
+    });
+  }, 350);
 }
 
 // ── Render: Positions ──────────────────────────────────────────
@@ -2333,6 +2456,13 @@ setInterval(async () => {                   // Scheduler every 30s
     if (resp.ok) { state.scheduler = await resp.json(); renderScheduler(); }
   } catch (e) { /* ignore */ }
 }, 30000);
+
+setInterval(async () => {                   // Watchlist every 60s
+  try {
+    const resp = await fetch('/api/watchlist');
+    if (resp.ok) { state.watchlist = await resp.json(); renderMarket(); }
+  } catch (e) { /* ignore */ }
+}, 60000);
 
 // Resize handler for equity curve
 window.addEventListener('resize', () => renderEquityCurve());

@@ -73,6 +73,7 @@ const liveData = {
   portfolio: null,        // { cash, positions, total_equity, ... }
   prevMarket: null,       // previous prices for change calculation
   scheduler: null,        // [{ name, interval, unit, at_time, next_run }, ...]
+  watchlist: null,        // { assets: [{symbol, is_core, is_held, is_dynamic, type, sector}], ... }
   connected: false,
   lastFetch: 0,
   wsConnected: false,
@@ -82,12 +83,13 @@ const LIVE_POLL_INTERVAL = 30000; // 30s
 
 async function fetchLiveData() {
   try {
-    const [mkt, hist, equity, port, sched] = await Promise.all([
+    const [mkt, hist, equity, port, sched, wl] = await Promise.all([
       fetch('/api/market').then(r => r.ok ? r.json() : null).catch(() => null),
       fetch('/api/price-history').then(r => r.ok ? r.json() : null).catch(() => null),
       fetch('/api/equity-history').then(r => r.ok ? r.json() : null).catch(() => null),
       fetch('/api/portfolio').then(r => r.ok ? r.json() : null).catch(() => null),
       fetch('/api/scheduler').then(r => r.ok ? r.json() : null).catch(() => null),
+      fetch('/api/watchlist').then(r => r.ok ? r.json() : null).catch(() => null),
     ]);
     if (mkt && Object.keys(mkt).length > 0) {
       // Normalize: API returns {BTC: {price: 87241, ...}} — flatten to {BTC: 87241}
@@ -103,6 +105,7 @@ async function fetchLiveData() {
     if (equity) liveData.equityHistory = equity;
     if (port) liveData.portfolio = port;
     if (sched) liveData.scheduler = sched;
+    if (wl && wl.assets) liveData.watchlist = wl;
     liveData.lastFetch = Date.now();
   } catch (e) {
     // Silently fail — static fallback will be used
@@ -478,6 +481,30 @@ function drawPlant(gx, gy) {
   ctx.fillRect(x - 0.5 * s, y - 16 * s, 1 * s, 6 * s);
 }
 
+// ── Ticker board scroll state ──────────────────────────────────────
+let _tickerScrollOffset = 0;   // which "page" of tickers we're showing
+let _tickerScrollTimer = 0;    // ms counter for auto-scroll
+const TICKER_SCROLL_INTERVAL = 4000; // rotate every 4 seconds
+const TICKER_SLOTS = 6;        // 2 rows x 3 columns visible at once
+
+// Fallback symbols when watchlist API hasn't responded yet
+const TICKER_FALLBACK = ['BTC', 'ETH', 'SPY', 'GLDM', 'NVDA', 'AAPL'];
+const STATIC_PRICES = { BTC: 87241, ETH: 2148, SPY: 512.3, GLDM: 45.20, NVDA: 892.1, AAPL: 178.4,
+  TSLA: 245.6, AMZN: 178.9, META: 510.2, TLT: 98.3, XLE: 82.1, SLV: 27.4, EWS: 20.1, FXI: 29.8 };
+
+function getTickerList() {
+  // Build ordered list from watchlist: held first (highlighted), then core, then dynamic
+  if (!liveData.watchlist || !liveData.watchlist.assets || liveData.watchlist.assets.length === 0) {
+    return TICKER_FALLBACK.map(sym => ({ symbol: sym, is_held: false, is_core: true, is_dynamic: false }));
+  }
+  const assets = liveData.watchlist.assets;
+  // Sort: held first, then core, then dynamic/other
+  const held = assets.filter(a => a.is_held);
+  const coreNotHeld = assets.filter(a => a.is_core && !a.is_held);
+  const dynamicNotHeld = assets.filter(a => !a.is_core && !a.is_held);
+  return [...held, ...coreNotHeld, ...dynamicNotHeld];
+}
+
 // ── Draw a wall ticker board (left wall, Strat's office, gy 0.5–4.5) ──
 function drawTickerBoard() {
   const { s } = getLayout();
@@ -535,19 +562,32 @@ function drawTickerBoard() {
     ctx.restore();
   }
 
-  // Title
-  const titleFs = Math.max(8, Math.round(12 * s));
-  ctx.font = `bold ${titleFs}px "SF Mono", "Courier New", monospace`;
-  ctx.fillStyle = '#5a7a90';
-  wallText('LIVE MARKETS', 0.04, 0.92);
+  // Get dynamic ticker list from watchlist
+  const allTickers = getTickerList();
+  const totalTickers = allTickers.length;
+  const totalPages = Math.max(1, Math.ceil(totalTickers / TICKER_SLOTS));
 
-  // Tickers — 2 rows x 3 columns (live data with static fallback)
-  const TICKER_SYMBOLS = ['BTC', 'ETH', 'SPY', 'GLDM', 'NVDA', 'AAPL'];
-  const STATIC_PRICES = { BTC: 87241, ETH: 2148, SPY: 512.3, GLDM: 45.20, NVDA: 892.1, AAPL: 178.4 };
-  const tickers = TICKER_SYMBOLS.map(sym => {
-    const price = (liveData.market && liveData.market[sym]) || STATIC_PRICES[sym];
+  // Auto-scroll: advance page based on animTime
+  _tickerScrollTimer += 16; // approx 1 frame at 60fps
+  if (_tickerScrollTimer >= TICKER_SCROLL_INTERVAL) {
+    _tickerScrollTimer = 0;
+    if (totalTickers > TICKER_SLOTS) {
+      _tickerScrollOffset = (_tickerScrollOffset + 1) % totalPages;
+    } else {
+      _tickerScrollOffset = 0;
+    }
+  }
+
+  // Slice the visible tickers for this page
+  const startIdx = _tickerScrollOffset * TICKER_SLOTS;
+  const visibleAssets = allTickers.slice(startIdx, startIdx + TICKER_SLOTS);
+
+  // Build ticker data with prices
+  const tickers = visibleAssets.map(asset => {
+    const sym = asset.symbol;
+    const price = (liveData.market && liveData.market[sym]) || STATIC_PRICES[sym] || 0;
     const prev = (liveData.prevMarket && liveData.prevMarket[sym]) || null;
-    const chgInfo = prev ? fmtChange(price, prev) : { text: '—', color: '#8b949e' };
+    let chgInfo = prev ? fmtChange(price, prev) : { text: '\u2014', color: '#8b949e' };
     if (!prev && liveData.priceHistory && liveData.priceHistory[sym] && liveData.priceHistory[sym].length >= 2) {
       const hist = liveData.priceHistory[sym];
       const oldP = hist[0], newP = hist[hist.length - 1];
@@ -555,8 +595,45 @@ function drawTickerBoard() {
       chgInfo.text = ci.text;
       chgInfo.color = ci.color;
     }
-    return { sym, val: fmtPrice(price), chg: chgInfo.text, color: chgInfo.color };
+    return {
+      sym,
+      val: fmtPrice(price),
+      chg: chgInfo.text,
+      color: chgInfo.color,
+      is_held: asset.is_held,
+      is_dynamic: asset.is_dynamic,
+      is_core: asset.is_core,
+    };
   });
+
+  // Title
+  const titleFs = Math.max(8, Math.round(12 * s));
+  ctx.font = `bold ${titleFs}px "SF Mono", "Courier New", monospace`;
+  ctx.fillStyle = '#5a7a90';
+  wallText('LIVE MARKETS', 0.04, 0.92);
+
+  // Page indicator (if scrolling)
+  if (totalPages > 1) {
+    const indFs = Math.max(6, Math.round(9 * s));
+    ctx.font = `${indFs}px "SF Mono", "Courier New", monospace`;
+    ctx.fillStyle = '#484f58';
+    const pageText = (_tickerScrollOffset + 1) + '/' + totalPages;
+    wallText(pageText, 0.92, 0.92, 'right');
+
+    // Dot indicators
+    const dotR = Math.max(1.5, 2.5 * s);
+    const dotSpacing = dotR * 3.5;
+    for (let pg = 0; pg < totalPages; pg++) {
+      const dotNx = 0.50 + (pg - (totalPages - 1) / 2) * (dotSpacing / wallLen) * 2;
+      const dotP = sPos(dotNx, 0.05);
+      ctx.beginPath();
+      ctx.arc(dotP.x, dotP.y, dotR, 0, Math.PI * 2);
+      ctx.fillStyle = pg === _tickerScrollOffset ? '#58a6ff' : '#30363d';
+      ctx.fill();
+    }
+  }
+
+  // Tickers — 2 rows x 3 columns
   const symFs = Math.max(8, Math.round(13 * s));
   const valFs = Math.max(7, Math.round(11 * s));
   const cols = 3;
@@ -568,10 +645,38 @@ function drawTickerBoard() {
     const nx = 0.06 + col * colW;
     const ny = row === 0 ? 0.68 : 0.32;
 
+    // Symbol label — color based on type
     ctx.font = `bold ${symFs}px "SF Mono", "Courier New", monospace`;
-    ctx.fillStyle = '#c9d1d9';
+    if (t.is_held) {
+      // Held positions: bright gold highlight
+      ctx.fillStyle = '#f0c040';
+    } else if (t.is_dynamic) {
+      // Dynamic/discovered assets: cyan accent
+      ctx.fillStyle = '#79c0ff';
+    } else {
+      // Core assets: standard light gray
+      ctx.fillStyle = '#c9d1d9';
+    }
     wallText(t.sym, nx, ny);
 
+    // Held indicator: small dot before symbol
+    if (t.is_held) {
+      const dotP = sPos(nx - 0.015, ny - 0.01);
+      ctx.beginPath();
+      ctx.arc(dotP.x, dotP.y, Math.max(2, 3 * s), 0, Math.PI * 2);
+      ctx.fillStyle = '#f0c040';
+      ctx.fill();
+    }
+
+    // Dynamic indicator: small diamond after symbol
+    if (t.is_dynamic) {
+      const tagFs = Math.max(5, Math.round(7 * s));
+      ctx.font = `${tagFs}px "SF Mono", "Courier New", monospace`;
+      ctx.fillStyle = '#79c0ff50';
+      wallText('\u25C6', nx + 0.08, ny);
+    }
+
+    // Price + change
     ctx.font = `${valFs}px "SF Mono", "Courier New", monospace`;
     ctx.fillStyle = t.color;
     wallText('$' + t.val + '  ' + t.chg, nx, ny - 0.12);

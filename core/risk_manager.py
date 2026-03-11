@@ -98,25 +98,12 @@ class RiskManager:
         if not execution_order.get("stop_loss"):
             return False, "No stop-loss defined — rejected", None
 
-        # Check 7: Sector concentration limit
-        sector_groups = {
-            "tech": ["AAPL", "NVDA", "TSLA", "AMZN", "META"],
-            "indices": ["SPY"],
-            "crypto": ["BTC", "ETH"],
-            "commodities": ["GLDM", "SLV"],
-            "bonds": ["TLT"],
-            "energy": ["XLE"],
-            "asia": ["FXI", "EWS"],
-        }
-        asset_sector = None
-        for sector, members in sector_groups.items():
-            if asset in members:
-                asset_sector = sector
-                break
-        if asset_sector:
+        # Check 7: Sector concentration limit (dynamic — uses asset registry for sector lookup)
+        asset_sector = self._get_sector(asset)
+        if asset_sector and asset_sector != "unknown":
             same_sector_count = sum(
                 1 for pos in open_positions
-                if pos.get("asset") in sector_groups[asset_sector]
+                if self._get_sector(pos.get("asset", "")) == asset_sector
             )
             if same_sector_count >= 4:
                 return (
@@ -132,6 +119,53 @@ class RiskManager:
 
         log.info("Order validated: %s %s", execution_order.get("direction"), asset)
         return True, "APPROVED", execution_order
+
+    @staticmethod
+    def _get_sector(asset: str) -> str:
+        """Get sector for an asset using the dynamic registry.
+
+        Falls back to hardcoded mapping for core assets to avoid yfinance calls
+        during hot-path risk checks.
+        """
+        # Hardcoded fallback for core assets (avoids network calls)
+        _CORE_SECTORS = {
+            "AAPL": "tech", "NVDA": "tech", "TSLA": "tech", "AMZN": "tech", "META": "tech",
+            "SPY": "indices", "BTC": "crypto", "ETH": "crypto",
+            "GLDM": "commodities", "SLV": "commodities",
+            "TLT": "bonds", "XLE": "energy", "FXI": "asia", "EWS": "asia",
+        }
+        if asset in _CORE_SECTORS:
+            return _CORE_SECTORS[asset]
+
+        # Dynamic assets: use registry sector
+        try:
+            from core.asset_registry import get_registry
+            registry = get_registry()
+            config = registry.get_config(asset)
+            sector = config.get("sector", "unknown")
+            # Normalize yfinance sectors to our groupings
+            sector_lower = sector.lower()
+            if "technology" in sector_lower or "communication" in sector_lower:
+                return "tech"
+            if "energy" in sector_lower:
+                return "energy"
+            if "financial" in sector_lower:
+                return "financials"
+            if "health" in sector_lower:
+                return "healthcare"
+            if "consumer" in sector_lower:
+                return "consumer"
+            if "industrial" in sector_lower:
+                return "industrials"
+            if "real estate" in sector_lower:
+                return "real_estate"
+            if "utilit" in sector_lower:
+                return "utilities"
+            if "material" in sector_lower or "basic" in sector_lower:
+                return "materials"
+            return sector_lower if sector_lower != "unknown" else "unknown"
+        except Exception:
+            return "unknown"
 
     def _check_correlation(
         self, asset: str, open_positions: list[dict[str, Any]]

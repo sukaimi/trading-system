@@ -77,6 +77,7 @@ class TestAssetRegistry:
     def test_missing_config_file(self, tmp_path):
         """Registry gracefully handles missing config file."""
         AssetRegistry._instance = None
-        with patch("core.asset_registry._ASSETS_FILE", str(tmp_path / "nonexistent.json")):
+        with patch("core.asset_registry._ASSETS_FILE", str(tmp_path / "nonexistent.json")), \
+             patch("core.asset_registry._DYNAMIC_CACHE_FILE", str(tmp_path / "nonexistent_dynamic.json")):
             registry = AssetRegistry()
             assert registry.tradeable_symbols == []
