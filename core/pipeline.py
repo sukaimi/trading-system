@@ -1311,10 +1311,10 @@ class TradingPipeline:
         return closed
 
     def sync_portfolio_with_broker(self) -> None:
-        """Log broker account status for monitoring (does NOT override internal equity).
+        """Sync internal equity with broker's reported equity.
 
-        Internal equity tracks from $100 allocated capital + trade P&L.
-        Broker balance is logged for health monitoring only.
+        Broker is the source of truth — it knows actual fills, borrow costs,
+        and available balance. Internal equity is overridden to match.
         """
         from core.alpaca_executor import AlpacaExecutor
         if not isinstance(self._executor, AlpacaExecutor):
@@ -1325,12 +1325,16 @@ class TradingPipeline:
                 return
             broker_equity = float(account.get("portfolio_value", 0))
             broker_cash = float(account.get("cash", 0))
+            old_equity = self._portfolio.equity
+            if broker_equity > 0:
+                self._portfolio.equity = broker_equity
+                self._portfolio.persist()
             log.info(
-                "Broker health: equity=$%.2f, cash=$%.2f | Internal: equity=$%.2f",
-                broker_equity, broker_cash, self._portfolio.equity,
+                "Broker sync: equity=$%.2f (was $%.2f, diff=$%.2f), cash=$%.2f",
+                broker_equity, old_equity, broker_equity - old_equity, broker_cash,
             )
         except Exception as e:
-            log.error("Broker health check failed: %s", e)
+            log.error("Broker sync failed: %s", e)
 
     def _extract_trade_principles(self, trade_id: str) -> None:
         """Extract and save principles from a closed trade via the SelfOptimizer.
