@@ -1839,7 +1839,33 @@ function drawNPCEffect(agent, pos) {
     }
   }
 
-  // Trader3 removed — repurposed as ChartScan agent
+  if (agent.name === 'ChartScan') {
+    // Smoking — cigarette + smoke wisps
+    const mouthX = x + 9 * s;
+    const mouthY = baseY - 48 * s;
+    ctx.fillStyle = '#e8e0d0';
+    ctx.fillRect(mouthX, mouthY - 1 * s, 8 * s, 2 * s);
+    ctx.fillStyle = '#ff6633';
+    ctx.fillRect(mouthX + 7 * s, mouthY - 1.2 * s, 2 * s, 2.4 * s);
+    const glowR = (1 + Math.sin(animTime * 3) * 0.3);
+    ctx.fillStyle = `rgba(255,100,30,${0.15 * glowR})`;
+    ctx.beginPath();
+    ctx.arc(mouthX + 8 * s, mouthY, 3 * s * glowR, 0, Math.PI * 2);
+    ctx.fill();
+    // Smoke wisps
+    for (let i = 0; i < 5; i++) {
+      const t = ((animTime * 0.4 + i * 0.35) % 1);
+      const sx = mouthX + 8 * s + Math.sin(animTime * 0.8 + i * 1.7) * 6 * s * t;
+      const sy = mouthY - t * 25 * s;
+      const sr = (1.5 + t * 4) * s;
+      ctx.globalAlpha = (1 - t) * 0.25;
+      ctx.fillStyle = 'rgba(180,180,190,0.9)';
+      ctx.beginPath();
+      ctx.arc(sx, sy, sr, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    ctx.globalAlpha = 1;
+  }
 }
 
 // ── Draw everything ────────────────────────────────────────────
