@@ -2175,7 +2175,7 @@ function draw() {
 
     drawList.push({ depth: drawGx + drawGy + depthBias, fn() {
       const pos = drawCharacter(_gx, _gy, _a.colors, _a.accessory, _leg, _bob, _seated, _a.female);
-      if (_a.npc) drawNPCEffect(_a, pos);
+      if (_a.npc || _a.name === 'ChartScan') drawNPCEffect(_a, pos);
       if (_a.state === 'interacting') bubbleQueue.push({ x: pos.x, y: pos.baseY });
     }});
   }
