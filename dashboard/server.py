@@ -289,55 +289,32 @@ async def get_regime_strategy() -> dict[str, Any]:
 
 @app.get("/api/watchlist")
 async def get_watchlist() -> dict[str, Any]:
-    """Return dynamic watchlist: held positions + recently active signals.
+    """Return dynamic watchlist: only assets we're actively trading (held positions).
 
-    This powers the dynamic market panel — only shows assets we're
-    currently trading or have recent signals for.
+    This powers the dynamic market panel — shows only what you're in.
+    Empty when no positions, grows as trades are taken.
     """
     try:
-        from core.asset_registry import get_core_assets, get_registry
+        from core.asset_registry import get_registry
         registry = get_registry()
 
-        # Start with core assets
-        core = get_core_assets()
-
-        # Add held positions (may include dynamic assets)
+        # Only held positions — nothing else
         held: list[str] = []
         if _portfolio:
             snap = _portfolio.snapshot()
             held = list({pos.get("asset", "") for pos in snap.get("open_positions", []) if pos.get("asset")})
 
-        # Add recently signaled assets from signal tracker
-        recent_signals: list[str] = []
-        sig_data = _read_json(os.path.join(DATA_DIR, "signal_accuracy.json"), [])
-        if isinstance(sig_data, list):
-            # Last 20 signals, deduplicated
-            seen: set[str] = set()
-            for sig in reversed(sig_data[-50:]):
-                asset = sig.get("asset", "")
-                if asset and asset != "MACRO" and asset not in seen:
-                    recent_signals.append(asset)
-                    seen.add(asset)
-                if len(recent_signals) >= 10:
-                    break
-
-        # Combine: core + held + recent signals (deduplicated, ordered)
-        all_assets: list[str] = []
-        seen_all: set[str] = set()
-        for group in [held, core, recent_signals]:
-            for sym in group:
-                if sym and sym not in seen_all and sym != "MACRO":
-                    all_assets.append(sym)
-                    seen_all.add(sym)
+        # Sort: dynamic discovered assets last, otherwise alphabetical
+        held.sort(key=lambda s: (not registry.is_core(s), s))
 
         # Annotate each asset
         watchlist: list[dict[str, Any]] = []
-        for sym in all_assets:
+        for sym in held:
             config = registry.get_config(sym)
             watchlist.append({
                 "symbol": sym,
                 "is_core": registry.is_core(sym),
-                "is_held": sym in held,
+                "is_held": True,
                 "is_dynamic": registry.is_dynamic(sym),
                 "type": config.get("type", "stock"),
                 "sector": config.get("sector", ""),
@@ -345,14 +322,13 @@ async def get_watchlist() -> dict[str, Any]:
 
         return {
             "assets": watchlist,
-            "core_count": len(core),
             "held_count": len(held),
             "dynamic_count": len([w for w in watchlist if w["is_dynamic"]]),
             "total": len(watchlist),
         }
     except Exception as e:
         log.warning("Watchlist fetch failed: %s", e)
-        return {"assets": [], "core_count": 0, "held_count": 0, "dynamic_count": 0, "total": 0}
+        return {"assets": [], "held_count": 0, "dynamic_count": 0, "total": 0}
 
 
 @app.get("/api/events/recent")
@@ -453,18 +429,16 @@ def _read_json(path: str, default: Any) -> Any:
 
 
 def _get_active_symbols() -> list[str]:
-    """Get symbols to fetch data for: core + any held dynamic assets."""
+    """Get symbols to fetch data for: only held positions."""
     try:
-        from core.asset_registry import get_core_assets, get_registry
-        symbols = list(get_core_assets())
-        # Add held dynamic assets
         if _portfolio:
             snap = _portfolio.snapshot()
-            for pos in snap.get("open_positions", []):
-                asset = pos.get("asset", "")
-                if asset and asset not in symbols:
-                    symbols.append(asset)
-        return symbols
+            symbols = list({pos.get("asset", "") for pos in snap.get("open_positions", []) if pos.get("asset")})
+            if symbols:
+                return sorted(symbols)
+        # Fallback: core assets if no portfolio loaded yet
+        from core.asset_registry import get_core_assets
+        return list(get_core_assets())
     except Exception:
         return ["BTC", "ETH", "GLDM", "SLV"]
 
