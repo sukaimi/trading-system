@@ -877,6 +877,13 @@ class TradingPipeline:
                 # Position doesn't exist on broker — clean up internal state
                 self._portfolio.remove_position(trade_id)
                 self._portfolio.record_trade(0)  # no P&L — already closed at broker
+                try:
+                    self._journal.record_exit(trade_id, {
+                        "asset": asset, "exit_price": current_price, "pnl_usd": 0,
+                        "pnl_pct": 0, "exit_reason": "stale_cleanup_stop_loss",
+                    })
+                except Exception:
+                    pass
                 closed.append({"trade_id": trade_id, "asset": asset, "reason": "stale_position_cleanup"})
                 continue
 
@@ -1037,6 +1044,13 @@ class TradingPipeline:
                 # Position doesn't exist on broker — clean up internal state
                 self._portfolio.remove_position(trade_id)
                 self._portfolio.record_trade(0)
+                try:
+                    self._journal.record_exit(trade_id, {
+                        "asset": asset, "exit_price": current_price, "pnl_usd": 0,
+                        "pnl_pct": 0, "exit_reason": "stale_cleanup_take_profit",
+                    })
+                except Exception:
+                    pass
                 closed.append({"trade_id": trade_id, "asset": asset, "reason": "stale_position_cleanup"})
                 continue
 
@@ -1222,6 +1236,13 @@ class TradingPipeline:
                 # Position doesn't exist on broker — clean up internal state
                 self._portfolio.remove_position(trade_id)
                 self._portfolio.record_trade(0)
+                try:
+                    self._journal.record_exit(trade_id, {
+                        "asset": asset, "exit_price": current_price, "pnl_usd": 0,
+                        "pnl_pct": 0, "exit_reason": "stale_cleanup_time_exit",
+                    })
+                except Exception:
+                    pass
                 closed.append({"trade_id": trade_id, "asset": asset, "reason": "stale_position_cleanup"})
                 continue
 
