@@ -2,7 +2,7 @@
 
 ## Project Overview
 
-Autonomous multi-agent AI trading system for 14 assets — BTC, ETH, GLDM (gold), SLV (silver), AAPL, NVDA, TSLA, AMZN, SPY, META, TLT (bonds), XLE (energy), EWS (Singapore), FXI (China) — using a 4-tier intelligence stack.
+Autonomous multi-agent AI trading system with **open universe** trading — any US-listed stock/ETF with >$1B market cap is tradeable. Core 14 assets: BTC, ETH, GLDM (gold), SLV (silver), AAPL, NVDA, TSLA, AMZN, SPY, META, TLT (bonds), XLE (energy), EWS (Singapore), FXI (China). NewsScout can discover opportunities in ANY stock. Uses a 4-tier intelligence stack.
 
 **Owner**: Sukaimi (Code&Canvas)
 **Stack**: Python 3.12 / Direct LLM API calls / Ubuntu 24.04 VPS
@@ -49,7 +49,7 @@ trading-system/
 ├── dashboard/       # FastAPI dashboard server + static files (index.html, agent-floor.html, lotus-creature.js)
 ├── config/          # Dynamic params JSON (updated weekly by SelfOptimizer)
 ├── data/            # Persisted state, trade journal, logs, weekly reviews (gitignored)
-├── tests/           # 39 test files, 627 tests (pytest)
+├── tests/           # 40 test files, 676 tests (pytest)
 ├── docs/            # PRD, Lotus spec
 ├── main.py          # Entry point — 12-task scheduler + dashboard
 └── requirements.txt
@@ -65,6 +65,7 @@ trading-system/
 - `core/coinbase_executor.py` — Coinbase Advanced Trade API crypto executor (BTC, ETH)
 - `core/routing_executor.py` — Smart routing: crypto→Coinbase, stocks/ETFs→Alpaca, SGX→IBKR (EXECUTOR_MODE=live)
 - `core/tiger_executor.py` — Tiger Brokers executor for SGX/US/HK stocks (tigeropen SDK)
+- `core/asset_registry.py` — Dynamic asset registry: core 14 from `config/assets.json` + open universe resolution via yfinance (quality gates: >$1B cap, >500K vol, no OTC/SPAC). Cache at `data/dynamic_assets.json`
 - `core/broker_sync.py` — Broker reconciliation engine: detect ghosts, orphans, qty mismatches
 - `core/cost_tracker.py` — LLM cost tracking with JSON persistence + daily budget limits (`check_budget()`)
 - `core/event_bus.py` — Real-time pub/sub for dashboard WebSocket + sync listeners
@@ -164,6 +165,9 @@ Optional: DASHBOARD_PORT (default 8080), DASHBOARD_ALLOWED_ORIGINS, GA4_MEASUREM
 - **Tier 3 learning systems**: Adaptive stop optimizer, session analyzer, confidence calibrator, phantom analyzer, regime strategy selector, enhanced SelfOptimizer with data-driven directives
 - **Roadmap features**: Proactive scan (3x/day), regime holding periods, reflexivity detection, principle extraction, kill switch, signal funnel, R:R enforcement (min 2:1), TP floor
 - **Gridlock fix (v52)**: Duplicate asset soft flag, pre-filter removed, correlation 0.50→0.65
+- **Open Universe (2026-03-11)**: Any US-listed stock with >$1B cap tradeable. NewsScout LLM prompt unlocked. Dynamic asset resolution via yfinance with quality gates. Disk cache at `data/dynamic_assets.json`. Risk manager uses dynamic sector lookup. Dashboard market panel shows only held positions (dynamic, scrollable). Agent floor ticker board auto-scrolls with pagination.
+- **Broker equity sync (2026-03-11)**: Internal equity now syncs to Alpaca's reported number every 5 min via `sync_portfolio_with_broker()`. Broker is source of truth.
+- **New endpoint**: `/api/watchlist` — returns held positions only for dynamic market panel
 
 ### Pending
 - [ ] **Phase 5: Optimization** — Analyze paper trading data, tune parameters (needs 10-20+ trades)
@@ -190,7 +194,7 @@ Optional: DASHBOARD_PORT (default 8080), DASHBOARD_ALLOWED_ORIGINS, GA4_MEASUREM
 - Always validate/fallback LLM enum responses — models don't always respect the schema.
 
 ### Portfolio State
-- **Equity drift between Alpaca and TradeHub**: Internal equity is tracked independently from Alpaca's broker equity. `sync_portfolio_with_broker()` logs the broker value but does NOT override internal equity. They will differ slightly (~0.05-0.1%) due to different price sources (CoinGecko vs Alpaca feed), timing (5-min refresh vs real-time), and spread/slippage. This is intentional during paper trading for cleaner analytics. Revisit when going live — broker equity is the real number.
+- **Equity syncs with broker**: `sync_portfolio_with_broker()` overrides internal equity with Alpaca's reported number every 5 min. Tiny drift (<0.05%) between syncs is normal due to price movement. Broker equity is the source of truth.
 - **Phantom PnL from test orders**: Early Alpaca test orders created fake -40% daily PnL entries that persisted in `portfolio_state.json` and triggered the circuit breaker repeatedly. When resetting, clear BOTH `portfolio_state.json` AND `circuit_breaker_log.json`.
 - **Stop-loss prices must be persisted**: Positions need `quantity` and `stop_loss_price` fields saved to survive restarts. Added in Phase 4.
 
