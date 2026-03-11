@@ -153,15 +153,18 @@ const EVENT_TO_ANIMATION = {
 };
 
 // Intern errand system: each intern has a route of agent desks to visit
-function createErrand(internName, route) {
-  return { intern: internName, route, step: 0, active: false };
+function createErrand(internName, route, labels) {
+  return { intern: internName, route, labels: labels || [], step: 0, active: false };
 }
 
 const errands = {
-  jrAnalyst:  createErrand('Trader1', ['NewsScout', 'Analyst']),                    // Research → Sr Analyst
-  jrTrader:   createErrand('Trader2', ['Executor', 'Journal']),                     // Hd of Trading → Auditor
+  jrAnalyst:  createErrand('Trader1', ['NewsScout', 'Analyst'],
+    ['Fetching news briefing', 'Delivering to analyst']),
+  jrTrader:   createErrand('Trader2', ['Executor', 'Journal'],
+    ['Checking execution status', 'Updating trade log']),
   // Trader3 repurposed as ChartScan agent — no longer an NPC errand
-  compliance: createErrand('Trader4', ['Strategist', 'Devil', 'Executor', 'Circuit']), // Patrol: CIO → Risk Analyst → Hd of Trading → CRO
+  compliance: createErrand('Trader4', ['Strategist', 'Devil', 'Executor', 'Circuit'],
+    ['Reviewing strategy', 'Checking risk flags', 'Auditing trades', 'Compliance report']),
 };
 
 function triggerErrand(errand) {
@@ -174,6 +177,7 @@ function triggerErrand(errand) {
 function advanceErrand(errand) {
   if (errand.step >= errand.route.length) {
     errand.active = false;
+    if (demo.labelAgent === errand.intern) { demo.label = ''; demo.labelAgent = null; }
     return;
   }
   const targetName = errand.route[errand.step];
@@ -182,6 +186,12 @@ function advanceErrand(errand) {
   const tgx = target.visitorGx != null ? target.visitorGx : target.homeGx;
   const tgy = target.visitorGy != null ? target.visitorGy : target.homeGy;
   if (sendAgentTo(errand.intern, tgx, tgy, 1.5)) {
+    // Show intent label above intern's head
+    const label = errand.labels[errand.step] || '';
+    if (label) {
+      demo.label = label;
+      demo.labelAgent = errand.intern;
+    }
     errand.step++;
   } else {
     errand.active = false;
