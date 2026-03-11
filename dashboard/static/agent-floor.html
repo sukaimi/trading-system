@@ -142,9 +142,9 @@ function connectEventWS() {
 const EVENT_TO_ANIMATION = {
   'pipeline:news_scan_complete':         { agent: 'NewsScout', target: 'Analyst',    pause: 1.5, label: 'Delivering news briefing' },
   'pipeline:thesis_generated':           { agent: 'Analyst',   target: 'Chart',      pause: 1.8, label: 'Checking technicals' },
+  'pipeline:chart_scan_start':           { agent: 'ChartScan', target: 'Chart',      pause: 1.5, label: 'Running chart scan' },
   'pipeline:chart_scan_complete':        { agent: 'ChartScan', target: 'Analyst',    pause: 1.5, label: 'Delivering chart scan' },
-  'pipeline:chart_analysis':             { agent: 'ChartScan', target: 'Chart',      pause: 1.8, label: 'Technical analysis' },
-  'pipeline:chart_scan_start':           { agent: 'ChartScan', target: 'ChartScan',  pause: 2.5, label: 'Running chart scan' },
+  'pipeline:chart_analysis':             { agent: 'Chart',     target: 'Devil',      pause: 2.0, label: 'Technical analysis review' },
   'pipeline:devil_verdict':              { agent: 'Analyst',   target: 'Risk',       pause: 1.5, label: 'Requesting risk check' },
   'pipeline:risk_check':                 { agent: 'Risk',      target: 'Executor',   pause: 1.0, label: 'Approving trade' },
   'pipeline:trade_executed':             { agent: 'Executor',  target: 'Journal',    pause: 1.2, label: 'Logging trade' },
@@ -1712,9 +1712,10 @@ function updatePantryVisits(dt) {
 // ── Demo sequence ──────────────────────────────────────────────
 const DEMO_STEPS = [
   { agent: 'NewsScout', target: 'Analyst',    pause: 1.5, label: 'Delivering news briefing', triggerJrAnalyst: true },
+  { agent: 'ChartScan', target: 'Chart',      pause: 1.5, label: 'Running chart scan' },
   { agent: 'ChartScan', target: 'Analyst',    pause: 1.5, label: 'Delivering chart scan' },
   { agent: 'Analyst',   target: 'Chart',      pause: 1.8, label: 'Checking technicals' },
-  { agent: 'Analyst',   target: 'Devil',      pause: 2.0, label: "Devil's advocate review" },
+  { agent: 'Chart',     target: 'Devil',      pause: 2.0, label: 'Technical analysis review' },
   { agent: 'Analyst',   target: 'Risk',       pause: 1.5, label: 'Requesting risk check' },
   { agent: 'Risk',      target: 'Executor',   pause: 1.0, label: 'Approving trade', triggerCompliance: true },
   { agent: 'Executor',  target: 'Journal',    pause: 1.2, label: 'Logging trade', triggerJrTrader: true },
