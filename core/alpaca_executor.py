@@ -348,6 +348,19 @@ class AlpacaExecutor:
                     "error": f"Alpaca close rejected: {error_msg}",
                 }
 
+            # HTTP 204 has no body — return synthetic confirmation
+            if resp.status_code == 204 or not resp.content:
+                log.info("ALPACA CLOSE: %s (204 no content)", asset)
+                return {
+                    "type": "order_confirmation",
+                    "timestamp": datetime.now(timezone.utc).isoformat(),
+                    "order_id": "",
+                    "asset": asset,
+                    "quantity": 0.0,
+                    "fill_price": 0.0,
+                    "status": "Closed",
+                }
+
             order_data = resp.json()
             order_id = order_data.get("id", "")
 
@@ -399,3 +412,89 @@ class AlpacaExecutor:
         except Exception as e:
             log.error("Alpaca account fetch failed: %s", e)
         return None
+
+    @staticmethod
+    def _alpaca_symbol_to_asset(symbol: str) -> str:
+        """Convert Alpaca symbol back to normalized asset name.
+
+        'BTC/USD' → 'BTC', 'BTCUSD' → 'BTC', 'AAPL' → 'AAPL'.
+        """
+        if "/" in symbol and symbol.endswith("/USD"):
+            return symbol.split("/")[0]
+        if symbol.endswith("USD") and len(symbol) > 3:
+            # Handle BTCUSD, ETHUSD formats
+            base = symbol[:-3]
+            if base in ("BTC", "ETH"):
+                return base
+        return symbol
+
+    def get_all_positions(self) -> dict[str, dict[str, Any]]:
+        """Fetch all open positions from Alpaca.
+
+        Returns dict keyed by normalized asset symbol (BTC not BTC/USD):
+        {asset: {"symbol": str, "qty": float, "side": str,
+                 "avg_entry_price": float, "current_price": float,
+                 "unrealized_pl": float, "qty_available": float}}
+        """
+        try:
+            resp = requests.get(
+                f"{self._base_url}/positions",
+                headers=self._headers,
+                timeout=10,
+            )
+            if resp.status_code != 200:
+                log.warning("Alpaca get_all_positions returned %d", resp.status_code)
+                return {}
+
+            positions: dict[str, dict[str, Any]] = {}
+            for pos in resp.json():
+                raw_symbol = pos.get("symbol", "")
+                asset = self._alpaca_symbol_to_asset(raw_symbol)
+                positions[asset] = {
+                    "symbol": raw_symbol,
+                    "qty": abs(float(pos.get("qty", 0))),
+                    "side": pos.get("side", "long"),
+                    "avg_entry_price": float(pos.get("avg_entry_price", 0)),
+                    "current_price": float(pos.get("current_price", 0)),
+                    "unrealized_pl": float(pos.get("unrealized_pl", 0)),
+                    "qty_available": float(pos.get("qty_available", 0)),
+                }
+            return positions
+        except Exception as e:
+            log.error("Alpaca get_all_positions failed: %s", e)
+            return {}
+
+    def get_open_orders(self) -> list[dict[str, Any]]:
+        """Fetch all open orders from Alpaca.
+
+        Returns list of dicts with keys: id, symbol, asset, side, qty,
+        type, status, created_at. Returns empty list on error.
+        """
+        try:
+            resp = requests.get(
+                f"{self._base_url}/orders",
+                params={"status": "open"},
+                headers=self._headers,
+                timeout=10,
+            )
+            if resp.status_code != 200:
+                log.warning("Alpaca get_open_orders returned %d", resp.status_code)
+                return []
+
+            orders: list[dict[str, Any]] = []
+            for order in resp.json():
+                raw_symbol = order.get("symbol", "")
+                orders.append({
+                    "id": order.get("id", ""),
+                    "symbol": raw_symbol,
+                    "asset": self._alpaca_symbol_to_asset(raw_symbol),
+                    "side": order.get("side", ""),
+                    "qty": float(order.get("qty", 0) or 0),
+                    "type": order.get("type", ""),
+                    "status": order.get("status", ""),
+                    "created_at": order.get("created_at", ""),
+                })
+            return orders
+        except Exception as e:
+            log.error("Alpaca get_open_orders failed: %s", e)
+            return []

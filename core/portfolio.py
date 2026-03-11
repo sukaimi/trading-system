@@ -254,6 +254,24 @@ class PortfolioState:
         event_bus.emit("portfolio", "updated", self.snapshot())
         return removed
 
+    def get_positions_by_asset(self, asset: str) -> list[dict]:
+        """Return all open positions for the given asset."""
+        with self._lock:
+            return [pos for pos in self.open_positions if pos.get("asset") == asset]
+
+    def adjust_position_quantity(self, trade_id: str, new_qty: float) -> bool:
+        """Update quantity for a position by trade_id. Returns True if found."""
+        with self._lock:
+            for pos in self.open_positions:
+                if pos.get("trade_id") == trade_id:
+                    pos["quantity"] = new_qty
+                    self.last_updated = datetime.utcnow().isoformat()
+                    break
+            else:
+                return False
+        self.persist()
+        return True
+
     def reset_daily(self) -> None:
         """Reset daily P&L counters (called at start of each trading day)."""
         with self._lock:
@@ -267,8 +285,10 @@ class PortfolioState:
         """Save state to JSON file and append equity history snapshot."""
         os.makedirs(os.path.dirname(self.state_file), exist_ok=True)
         state = self.snapshot()
-        with open(self.state_file, "w") as f:
+        tmp_file = self.state_file + ".tmp"
+        with open(tmp_file, "w") as f:
             json.dump(state, f, indent=2)
+        os.replace(tmp_file, self.state_file)
         self._record_equity_snapshot()
         log.info("Portfolio state persisted to %s", self.state_file)
 

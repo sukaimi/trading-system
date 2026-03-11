@@ -155,22 +155,21 @@ class TestCorrelationLimits:
 
     @patch("tools.market_data.MarketDataFetcher")
     @patch("tools.correlation.CorrelationAnalyzer")
-    def test_negative_correlation_uses_absolute_value(self, mock_analyzer_cls, mock_mdf_cls):
-        """Negative correlation should be checked by absolute value."""
+    def test_negative_correlation_allowed_through(self, mock_analyzer_cls, mock_mdf_cls):
+        """Negative correlation = diversification, should be approved."""
         mock_mdf = MagicMock()
         mock_mdf.get_ohlcv.return_value = [{"close": float(i)} for i in range(30)]
         mock_mdf_cls.return_value = mock_mdf
 
         mock_analyzer = MagicMock()
-        mock_analyzer.pairwise_correlation.return_value = -0.9  # Strong negative correlation
+        mock_analyzer.pairwise_correlation.return_value = -0.9  # Strong negative = diversification
         mock_analyzer_cls.return_value = mock_analyzer
 
         rm = RiskManager(_make_config(max_correlation=0.8))
         portfolio = _make_portfolio([{"asset": "BTC"}])
 
         approved, reason, _ = rm.validate_order(_make_order("GLDM"), portfolio)
-        assert approved is False
-        assert "Correlation limit" in reason
+        assert approved is True
 
     @patch("tools.market_data.MarketDataFetcher")
     @patch("tools.correlation.CorrelationAnalyzer")

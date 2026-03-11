@@ -31,6 +31,7 @@ from core.portfolio import PortfolioState
 from core.risk_manager import RiskManager
 from core.self_optimizer import SelfOptimizer
 from dashboard.server import start_dashboard
+from core.broker_sync import BrokerReconciler
 from tools.telegram_bot import TelegramNotifier
 
 log = setup_logger("trading.main")
@@ -125,7 +126,16 @@ def main():
     )
     log.info("Trading pipeline initialized")
 
-    # Log broker account status on startup (does not override internal equity)
+    # Broker reconciliation on startup
+    reconciler = BrokerReconciler(executor=executor, portfolio=portfolio, telegram=telegram)
+    auto_fix = os.getenv("BROKER_SYNC_AUTO_FIX", "false").lower() == "true"
+    report = reconciler.reconcile(auto_fix=auto_fix)
+    if not report.is_clean:
+        log.warning("Broker reconciliation found discrepancies:\n%s", report.summary)
+    else:
+        log.info("Broker reconciliation: all clean")
+
+    # Log broker account status
     pipeline.sync_portfolio_with_broker()
 
     # 7. Initialize heartbeat (skip IBKR check in paper mode)
@@ -191,6 +201,14 @@ def main():
             )
             time.sleep(2)  # Let Telegram/event bus flush
             os._exit(1)  # systemd will restart us
+
+        # Periodic broker reconciliation (log-only unless BROKER_SYNC_AUTO_FIX=true)
+        try:
+            r = reconciler.reconcile(auto_fix=auto_fix)
+            if not r.is_clean:
+                log.warning("Broker drift detected: %s", r.summary)
+        except Exception as e:
+            log.error("Periodic reconciliation failed: %s", e)
 
         # Run trailing stop update + stop-loss + take-profit + holding period checks (Tier 0 — deterministic, every 5 min)
         pipeline.update_trailing_stops()
