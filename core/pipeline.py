@@ -934,6 +934,7 @@ class TradingPipeline:
                     except (ValueError, TypeError):
                         pass
                 self._journal.record_exit(trade_id, {
+                    "asset": asset,
                     "exit_price": exit_price,
                     "pnl_usd": round(pnl, 2),
                     "pnl_pct": round(pnl_pct, 2),
@@ -1093,6 +1094,7 @@ class TradingPipeline:
                     except (ValueError, TypeError):
                         pass
                 self._journal.record_exit(trade_id, {
+                    "asset": asset,
                     "exit_price": exit_price,
                     "pnl_usd": round(pnl, 2),
                     "pnl_pct": round(pnl_pct, 2),
@@ -1267,6 +1269,7 @@ class TradingPipeline:
             try:
                 pnl_pct = ((pnl) / (entry_price * quantity) * 100) if entry_price and quantity else 0
                 self._journal.record_exit(trade_id, {
+                    "asset": asset,
                     "exit_price": exit_price,
                     "pnl_usd": round(pnl, 2),
                     "pnl_pct": round(pnl_pct, 2),

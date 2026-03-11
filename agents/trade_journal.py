@@ -43,8 +43,13 @@ class TradeJournal:
         confirmation: OrderConfirmation,
         market_context: dict[str, Any] | None = None,
     ) -> JournalEntry:
-        """Record a trade entry in the journal."""
-        trade_id = self._generate_trade_id()
+        """Record a trade entry in the journal.
+
+        Uses the broker's order_id as trade_id so that record_exit() can
+        match exits by the same ID stored in the portfolio.
+        """
+        # Use broker order_id as trade_id to match portfolio + signal tracker
+        trade_id = str(confirmation.order_id) if confirmation.order_id else self._generate_trade_id()
 
         mc = MarketContext()
         if market_context:
@@ -62,8 +67,8 @@ class TradeJournal:
             direction=thesis.direction,
             entry_price=confirmation.fill_price,
             position_size_pct=thesis.suggested_position_pct,
-            stop_loss_price=None,
-            take_profit_price=None,
+            stop_loss_price=thesis.supporting_data.get("stop_loss_price"),
+            take_profit_price=thesis.supporting_data.get("take_profit_price"),
             thesis_summary=thesis.thesis,
             thesis_confidence_original=thesis.confidence,
             thesis_confidence_after_devil=verdict.confidence_adjusted,
@@ -86,36 +91,65 @@ class TradeJournal:
     def record_exit(
         self, trade_id: str, exit_data: dict[str, Any]
     ) -> JournalEntry | None:
-        """Record a trade exit with outcome and lessons."""
-        entries = self._load_journal()
+        """Record a trade exit with outcome and lessons.
 
+        Matches by trade_id first. Falls back to matching the most recent
+        open entry for the same asset (handles legacy entries with mismatched IDs).
+        """
+        entries = self._load_journal()
+        asset = exit_data.get("asset", "")
+
+        # Primary lookup: exact trade_id match
+        match_idx = None
         for i, entry_dict in enumerate(entries):
             if entry_dict.get("trade_id") == trade_id:
-                entry_dict["timestamp_close"] = datetime.utcnow().isoformat()
-                entry_dict["exit_price"] = exit_data.get("exit_price", 0.0)
+                match_idx = i
+                break
 
-                outcome = {
-                    "pnl_usd": exit_data.get("pnl_usd", 0.0),
-                    "pnl_pct": exit_data.get("pnl_pct", 0.0),
-                    "thesis_correct": exit_data.get("thesis_correct"),
-                    "exit_reason": exit_data.get("exit_reason", ""),
-                    "hold_duration_hours": exit_data.get("hold_duration_hours", 0.0),
-                    "mae_pct": exit_data.get("mae_pct", 0.0),
-                    "mfe_pct": exit_data.get("mfe_pct", 0.0),
-                }
-                entry_dict["outcome"] = outcome
+        # Fallback: find most recent open entry for same asset (legacy ID mismatch)
+        if match_idx is None and asset:
+            for i in range(len(entries) - 1, -1, -1):
+                entry_dict = entries[i]
+                if (entry_dict.get("asset") == asset
+                        and entry_dict.get("trade_id")
+                        and not entry_dict.get("timestamp_close")
+                        and not entry_dict.get("outcome", {}).get("exit_reason")):
+                    match_idx = i
+                    log.info("Exit fallback match: trade_id=%s -> journal entry %s (asset=%s)",
+                             trade_id, entry_dict.get("trade_id"), asset)
+                    break
 
-                # Generate lessons via DeepSeek
-                lessons = self._generate_lessons(entry_dict)
-                entry_dict["lessons"] = lessons
+        if match_idx is None:
+            log.warning("Trade %s not found in journal (asset=%s)", trade_id, asset)
+            return None
 
-                entries[i] = entry_dict
-                self._save_journal(entries)
-                log.info("Recorded trade exit: %s", trade_id)
-                return JournalEntry.model_validate(entry_dict)
+        entry_dict = entries[match_idx]
+        entry_dict["timestamp_close"] = datetime.utcnow().isoformat()
+        entry_dict["exit_price"] = exit_data.get("exit_price", 0.0)
 
-        log.warning("Trade %s not found in journal", trade_id)
-        return None
+        outcome = {
+            "pnl_usd": exit_data.get("pnl_usd", 0.0),
+            "pnl_pct": exit_data.get("pnl_pct", 0.0),
+            "thesis_correct": exit_data.get("thesis_correct"),
+            "exit_reason": exit_data.get("exit_reason", ""),
+            "hold_duration_hours": exit_data.get("hold_duration_hours", 0.0),
+            "mae_pct": exit_data.get("mae_pct", 0.0),
+            "mfe_pct": exit_data.get("mfe_pct", 0.0),
+        }
+        entry_dict["outcome"] = outcome
+
+        # Generate lessons via DeepSeek
+        lessons = self._generate_lessons(entry_dict)
+        entry_dict["lessons"] = lessons
+
+        entries[match_idx] = entry_dict
+        self._save_journal(entries)
+        log.info("Recorded trade exit: %s (asset=%s, pnl=$%.2f)",
+                 trade_id, asset, exit_data.get("pnl_usd", 0.0))
+        try:
+            return JournalEntry.model_validate(entry_dict)
+        except Exception:
+            return None
 
     def record_no_trade(
         self, signal: SignalAlert, reasoning: str
