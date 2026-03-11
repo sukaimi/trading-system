@@ -250,7 +250,7 @@ class ExecutionOrder(BaseModel):
 class OrderConfirmation(BaseModel):
     type: str = "order_confirmation"
     timestamp: datetime = Field(default_factory=datetime.utcnow)
-    order_id: int = 0
+    order_id: str = ""
     asset: str
 
     @field_validator("asset")
