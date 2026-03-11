@@ -65,10 +65,42 @@ class AlpacaExecutor:
         self._order_counter = 0
         self._lock = threading.Lock()
 
+        # Market clock cache (avoid hammering Alpaca clock API)
+        self._clock_cache: dict[str, Any] = {}
+        self._clock_cache_ts: float = 0.0
+
         log.info(
             "Alpaca executor initialized (paper=%s, url=%s)",
             self.paper_mode, self._base_url,
         )
+
+    def is_market_open(self) -> bool:
+        """Check if US stock market is open via Alpaca clock API.
+
+        Caches result for 5 minutes to avoid API spam.
+        Returns False if the API call fails (safe default: don't attempt close).
+        """
+        now = time.time()
+        if now - self._clock_cache_ts < 300:
+            return self._clock_cache.get("is_open", False)
+
+        try:
+            resp = requests.get(
+                f"{self._base_url}/clock",
+                headers=self._headers,
+                timeout=10,
+            )
+            if resp.status_code == 200:
+                data = resp.json()
+                self._clock_cache = data
+                self._clock_cache_ts = now
+                is_open = data.get("is_open", False)
+                log.info("Alpaca market clock: is_open=%s", is_open)
+                return is_open
+        except Exception as e:
+            log.warning("Alpaca clock API failed: %s — assuming closed", e)
+
+        return False
 
     def _next_order_id(self) -> int:
         with self._lock:

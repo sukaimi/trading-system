@@ -118,6 +118,9 @@ class TradingPipeline:
         except Exception as e:
             log.warning("Could not load risk_params.json: %s", e)
 
+        # Track deferred close attempts (log once per asset, not every heartbeat)
+        self._deferred_closes: set[str] = set()
+
         # Backfill any legacy positions missing fields
         self._backfill_legacy_positions()
 
@@ -796,14 +799,35 @@ class TradingPipeline:
             )
         return broker_qty
 
+    @staticmethod
+    def _is_crypto(asset: str) -> bool:
+        """Check if asset is crypto (trades 24/7, no market hours gate)."""
+        return asset in ("BTC", "ETH")
+
     def _close_broker_position(self, asset: str, trade_id: str, quantity: float,
                                 direction: str, thesis_prefix: str) -> dict[str, Any]:
         """Close a position on the broker, using DELETE endpoint for Alpaca to avoid wash trades.
 
         Falls back to counter-direction order for non-Alpaca executors.
+        Skips stock/ETF closes when US market is closed (crypto trades 24/7).
         """
         from core.alpaca_executor import AlpacaExecutor
         if isinstance(self._executor, AlpacaExecutor):
+            # Gate: skip stock/ETF closes when market is closed
+            if not self._is_crypto(asset) and not self._executor.is_market_open():
+                if asset not in self._deferred_closes:
+                    self._deferred_closes.add(asset)
+                    log.info(
+                        "DEFERRED CLOSE: %s (trade %s) — US market closed, will retry at market open",
+                        asset, trade_id,
+                    )
+                return {
+                    "type": "order_error",
+                    "timestamp": datetime.now(timezone.utc).isoformat(),
+                    "error": f"Market closed — deferring close for {asset}",
+                }
+            # Market is open — clear deferred flag
+            self._deferred_closes.discard(asset)
             return self._executor.close_position(asset)
 
         # Non-Alpaca: use counter-direction order
