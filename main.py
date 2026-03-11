@@ -129,6 +129,10 @@ def main():
     # Broker reconciliation on startup
     reconciler = BrokerReconciler(executor=executor, portfolio=portfolio, telegram=telegram)
     auto_fix = os.getenv("BROKER_SYNC_AUTO_FIX", "false").lower() == "true"
+    # Cancel stale orders before reconciliation (frees reserved inventory)
+    canceled = reconciler.cancel_all_orders()
+    if canceled:
+        log.info("Canceled %d stale orders before reconciliation", canceled)
     report = reconciler.reconcile(auto_fix=auto_fix)
     if not report.is_clean:
         log.warning("Broker reconciliation found discrepancies:\n%s", report.summary)
