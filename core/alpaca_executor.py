@@ -319,20 +319,29 @@ class AlpacaExecutor:
             log.error("Alpaca position fetch failed for %s: %s", symbol, e)
         return None
 
-    def cancel_orders_for_symbol(self, asset: str) -> int:
+    def cancel_orders_for_symbol(self, asset: str) -> tuple[int, int]:
         """Cancel all open orders for a specific symbol.
 
         This frees up reserved inventory so position closes can succeed.
-        Returns count of orders canceled.
+        Returns (canceled_count, stuck_count) — stuck means orders in
+        pending_cancel that can't be re-canceled.
         """
         symbol = _get_alpaca_symbol(asset) or asset
         canceled = 0
+        stuck = 0
         try:
             orders = self.get_open_orders()
             for order in orders:
                 if order["asset"] != asset:
                     continue
                 order_id = order["id"]
+                status = order.get("status", "")
+
+                # Orders stuck in pending_cancel can't be re-canceled
+                if status == "pending_cancel":
+                    stuck += 1
+                    continue
+
                 try:
                     resp = requests.delete(
                         f"{self._base_url}/orders/{order_id}",
@@ -341,8 +350,11 @@ class AlpacaExecutor:
                     )
                     if resp.status_code in (200, 204):
                         log.info("Canceled order %s for %s (status was %s)",
-                                 order_id[:8], symbol, order.get("status", ""))
+                                 order_id[:8], symbol, status)
                         canceled += 1
+                    elif resp.status_code == 422:
+                        # Already being canceled
+                        stuck += 1
                     else:
                         log.warning("Cancel order %s returned %d: %s",
                                     order_id[:8], resp.status_code, resp.text[:200])
@@ -350,7 +362,7 @@ class AlpacaExecutor:
                     log.warning("Cancel order %s failed: %s", order_id[:8], e)
         except Exception as e:
             log.warning("cancel_orders_for_symbol(%s) failed: %s", symbol, e)
-        return canceled
+        return canceled, stuck
 
     def close_position(self, asset: str) -> dict[str, Any]:
         """Close a position using Alpaca's DELETE /positions/{symbol} endpoint.
@@ -363,10 +375,21 @@ class AlpacaExecutor:
         encoded = symbol.replace("/", "%2F")
 
         # Cancel pending orders first to free reserved qty
-        canceled = self.cancel_orders_for_symbol(asset)
+        canceled, stuck = self.cancel_orders_for_symbol(asset)
         if canceled > 0:
             log.info("Canceled %d pending orders for %s before closing", canceled, symbol)
             time.sleep(1)  # Brief pause for Alpaca to process cancellations
+
+        if stuck > 0:
+            log.warning(
+                "SKIP CLOSE %s: %d orders stuck in pending_cancel — "
+                "inventory reserved until market opens", symbol, stuck,
+            )
+            return {
+                "type": "order_error",
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "error": f"Cannot close {symbol}: {stuck} orders stuck in pending_cancel — will retry at market open",
+            }
 
         try:
             resp = requests.delete(
