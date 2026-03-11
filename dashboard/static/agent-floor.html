@@ -142,7 +142,9 @@ function connectEventWS() {
 const EVENT_TO_ANIMATION = {
   'pipeline:news_scan_complete':         { agent: 'NewsScout', target: 'Analyst',    pause: 1.5, label: 'Delivering news briefing' },
   'pipeline:thesis_generated':           { agent: 'Analyst',   target: 'Chart',      pause: 1.8, label: 'Checking technicals' },
-  'pipeline:chart_analysis':             { agent: 'Analyst',   target: 'Devil',      pause: 2.0, label: "Devil's advocate review" },
+  'pipeline:chart_scan_complete':        { agent: 'ChartScan', target: 'Analyst',    pause: 1.5, label: 'Delivering chart scan' },
+  'pipeline:chart_analysis':             { agent: 'ChartScan', target: 'Chart',      pause: 1.8, label: 'Technical analysis' },
+  'pipeline:chart_scan_start':           { agent: 'ChartScan', target: 'ChartScan',  pause: 2.5, label: 'Running chart scan' },
   'pipeline:devil_verdict':              { agent: 'Analyst',   target: 'Risk',       pause: 1.5, label: 'Requesting risk check' },
   'pipeline:risk_check':                 { agent: 'Risk',      target: 'Executor',   pause: 1.0, label: 'Approving trade' },
   'pipeline:trade_executed':             { agent: 'Executor',  target: 'Journal',    pause: 1.2, label: 'Logging trade' },
@@ -158,7 +160,7 @@ function createErrand(internName, route) {
 const errands = {
   jrAnalyst:  createErrand('Trader1', ['NewsScout', 'Analyst']),                    // Research → Sr Analyst
   jrTrader:   createErrand('Trader2', ['Executor', 'Journal']),                     // Hd of Trading → Auditor
-  dataEntry:  createErrand('Trader3', ['Risk', 'Devil', 'NewsScout']),              // Risk Mgr → Risk Analyst → Research
+  // Trader3 repurposed as ChartScan agent — no longer an NPC errand
   compliance: createErrand('Trader4', ['Strategist', 'Devil', 'Executor', 'Circuit']), // Patrol: CIO → Risk Analyst → Hd of Trading → CRO
 };
 
@@ -188,7 +190,7 @@ function advanceErrand(errand) {
 
 function triggerJrAnalystErrand() { triggerErrand(errands.jrAnalyst); }
 function triggerJrTraderErrand() { triggerErrand(errands.jrTrader); }
-function triggerDataEntryErrand() { triggerErrand(errands.dataEntry); }
+// dataEntry errand removed — Trader3 repurposed as ChartScan agent
 function triggerCompliancePatrol() { triggerErrand(errands.compliance); }
 
 let liveMode = false;
@@ -1440,8 +1442,8 @@ const agents = [
     colors: { body: '#6b9e78', skin: '#e8c49a', legs: '#3a4a3a', hair: '#2a1a0a', hat: null } },
   { name: 'Trader2', gx: 5,  gy: 12.0, npc: true, accessory: null,
     colors: { body: '#7a8fc2', skin: '#f0c8a0', legs: '#2a3a5a', hair: '#4a3520', hat: null } },
-  { name: 'Trader3', gx: 8,  gy: 12.0, npc: true, accessory: null,
-    colors: { body: '#c29a6b', skin: '#d4a88c', legs: '#5a4a3a', hair: '#1a1a2e', hat: null } },
+  { name: 'ChartScan', gx: 8,  gy: 12.0, accessory: 'chart',
+    colors: { body: '#9b6cff', skin: '#d4a88c', legs: '#3a2a5a', hair: '#1a1a2e', hat: null } },
   { name: 'Trader4', gx: 11, gy: 9.0, npc: true, accessory: null, female: true,
     colors: { body: '#e05080', skin: '#f5d0b0', legs: '#1a1a2e', hair: '#2a0a0a', hat: null } },
 ];
@@ -1456,7 +1458,7 @@ agents.forEach(a => {
   a.walkPath = [];
   a.walkIndex = 0;
   a.walkProgress = 0;
-  a.walkSpeed = (a.name === 'Trader1' || a.name === 'Trader2') ? 4.5 : 3.0;
+  a.walkSpeed = (a.name === 'Trader1' || a.name === 'Trader2' || a.name === 'ChartScan') ? 4.5 : 3.0;
   a.legPhase = 0;
   a.idleBob = 0;
   a.interactTimer = 0;
@@ -1485,7 +1487,7 @@ const DESK_OBSTACLES = [
   { gx: 12, gy: 7 }, { gx: 13, gy: 7 }, // Devil
   { gx: 2, gy: 13 },   // Trader1
   { gx: 5, gy: 13 },   // Trader2
-  { gx: 8, gy: 13 },   // Trader3
+  { gx: 8, gy: 13 },   // ChartScan
   { gx: 11, gy: 10 },  // Trader4
   { gx: 2, gy: 10 }, { gx: 5, gy: 10 }, { gx: 8, gy: 10 },
 ];
@@ -1574,7 +1576,7 @@ function calcWalkPath(fromGx, fromGy, toGx, toGy) {
 function sendAgentTo(agentName, targetGx, targetGy, pauseDuration) {
   const agent = agents.find(a => a.name === agentName);
   if (!agent || agent.state !== 'idle') return false;
-  if (agent.npc && !['Trader1','Trader2','Trader3','Trader4'].includes(agent.name)) return false;  // allow intern errands
+  if (agent.npc && !['Trader1','Trader2','Trader4'].includes(agent.name)) return false;  // allow intern errands
   agent.state = 'walking';
   agent.walkPath = calcWalkPath(agent.renderGx, agent.renderGy, targetGx, targetGy);
   agent.walkIndex = 0;
@@ -1620,7 +1622,7 @@ function updateAgentWalk(agent, dt) {
       agent.state = 'idle';
       agent.renderGx = agent.homeGx;
       agent.renderGy = agent.homeGy;
-      agent.walkSpeed = (agent.name === 'Trader1' || agent.name === 'Trader2') ? 4.5 : 3.0;
+      agent.walkSpeed = (agent.name === 'Trader1' || agent.name === 'Trader2' || agent.name === 'ChartScan') ? 4.5 : 3.0;
     }
     agent.legPhase = 0;
     return;
@@ -1710,12 +1712,13 @@ function updatePantryVisits(dt) {
 // ── Demo sequence ──────────────────────────────────────────────
 const DEMO_STEPS = [
   { agent: 'NewsScout', target: 'Analyst',    pause: 1.5, label: 'Delivering news briefing', triggerJrAnalyst: true },
+  { agent: 'ChartScan', target: 'Analyst',    pause: 1.5, label: 'Delivering chart scan' },
   { agent: 'Analyst',   target: 'Chart',      pause: 1.8, label: 'Checking technicals' },
   { agent: 'Analyst',   target: 'Devil',      pause: 2.0, label: "Devil's advocate review" },
   { agent: 'Analyst',   target: 'Risk',       pause: 1.5, label: 'Requesting risk check' },
   { agent: 'Risk',      target: 'Executor',   pause: 1.0, label: 'Approving trade', triggerCompliance: true },
   { agent: 'Executor',  target: 'Journal',    pause: 1.2, label: 'Logging trade', triggerJrTrader: true },
-  { wait: 4.0, triggerDataEntry: true },
+  { wait: 4.0 },
   { agent: 'Analyst',   target: 'Strategist', pause: 2.0, label: 'Strategy consultation' },
   { wait: 3.0 },
 ];
@@ -1737,7 +1740,7 @@ function updateDemo(dt) {
       demo.waitTimer = step.wait;
       demo.label = '';
       demo.labelAgent = null;
-      if (step.triggerDataEntry) triggerDataEntryErrand();
+      // dataEntry errand removed — Trader3 is now ChartScan agent
     } else {
       // Recall agents from pantry if needed for this step
       const walker = agents.find(a => a.name === step.agent);
@@ -1835,33 +1838,7 @@ function drawNPCEffect(agent, pos) {
     }
   }
 
-  if (agent.name === 'Trader3') {
-    // Smoking — cigarette + smoke wisps
-    const mouthX = x + 9 * s;
-    const mouthY = baseY - 48 * s;
-    ctx.fillStyle = '#e8e0d0';
-    ctx.fillRect(mouthX, mouthY - 1 * s, 8 * s, 2 * s);
-    ctx.fillStyle = '#ff6633';
-    ctx.fillRect(mouthX + 7 * s, mouthY - 1.2 * s, 2 * s, 2.4 * s);
-    const glowR = (1 + Math.sin(animTime * 3) * 0.3);
-    ctx.fillStyle = `rgba(255,100,30,${0.15 * glowR})`;
-    ctx.beginPath();
-    ctx.arc(mouthX + 8 * s, mouthY, 3 * s * glowR, 0, Math.PI * 2);
-    ctx.fill();
-    // Smoke wisps
-    for (let i = 0; i < 5; i++) {
-      const t = ((animTime * 0.4 + i * 0.35) % 1);
-      const sx = mouthX + 8 * s + Math.sin(animTime * 0.8 + i * 1.7) * 6 * s * t;
-      const sy = mouthY - t * 25 * s;
-      const sr = (1.5 + t * 4) * s;
-      ctx.globalAlpha = (1 - t) * 0.25;
-      ctx.fillStyle = 'rgba(180,180,190,0.9)';
-      ctx.beginPath();
-      ctx.arc(sx, sy, sr, 0, Math.PI * 2);
-      ctx.fill();
-    }
-    ctx.globalAlpha = 1;
-  }
+  // Trader3 removed — repurposed as ChartScan agent
 }
 
 // ── Draw everything ────────────────────────────────────────────
@@ -1993,7 +1970,7 @@ function draw() {
   drawChair(12, 6.0);  // Devil
   drawChair(2, 12.0);  // Trader1
   drawChair(5, 12.0);  // Trader2
-  drawChair(8, 12.0);  // Trader3
+  drawChair(8, 12.0);  // ChartScan
   drawChair(11, 9.0);  // Trader4
   drawChair(2, 9.0);   // Risk
   drawChair(5, 9.0);   // Executor
@@ -2125,8 +2102,8 @@ function draw() {
     drawNP('Jr Trader', 5.5, 13.5);
   }});
   drawList.push({ depth: 8 + 13, fn() {
-    drawCube(8,13,1,deskH,1,'#7a6a55'); drawMonitor(8.5,13.5,'#382a28');
-    drawNP('Data Entry', 8.5, 13.5);
+    drawCube(8,13,1,deskH,1,'#7a6a55'); drawMonitor(8.5,13.5,'#3a1a48');
+    drawNP('Chart Scan', 8.5, 13.5);
   }});
   drawList.push({ depth: 11 + 10, fn() {
     drawCube(11,10,1,deskH,1,'#7a6a55'); drawMonitor(11.5,10.5,'#28283a');
