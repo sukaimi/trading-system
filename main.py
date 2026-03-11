@@ -91,6 +91,9 @@ def main():
         executor = AlpacaExecutor()
     elif executor_mode == "ibkr":
         executor = Executor()
+    elif executor_mode == "tiger":
+        from core.tiger_executor import TigerExecutor
+        executor = TigerExecutor()
     else:
         executor = PaperExecutor()
     log.info("Executor initialized (mode=%s, paper_mode=%s)", executor_mode, executor.paper_mode)

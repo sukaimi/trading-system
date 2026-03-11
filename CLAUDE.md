@@ -6,7 +6,7 @@ Autonomous multi-agent AI trading system for 14 assets — BTC, ETH, GLDM (gold)
 
 **Owner**: Sukaimi (Code&Canvas)
 **Stack**: Python 3.12 / Direct LLM API calls / Ubuntu 24.04 VPS
-**Executor**: Alpaca (paper trading) — not IBKR
+**Executor**: Multi-broker — Alpaca, IBKR, Tiger Brokers, Coinbase (per-tenant via EXECUTOR_MODE)
 **PRD**: `docs/TRADING_AGENT_PRD.md`
 **Dashboard**: `https://tradebot.codeandcraft.ai` — Agent Trading Floor + trading dashboard
 **Repo**: `https://github.com/sukaimi/trading-system`
@@ -38,11 +38,11 @@ Emergency: CircuitBreaker → halt trading → auto-recovery after 6h cooldown
 ```
 trading-system/
 ├── agents/          # 6 agent modules
-├── core/            # 27 core modules (schemas, llm_client, pipeline, portfolio, risk_manager,
+├── core/            # 29 core modules (schemas, llm_client, pipeline, portfolio, risk_manager,
 │                    #   executor, routing_executor, coinbase_executor, alpaca_executor,
-│                    #   paper_executor, heartbeat, logger, self_optimizer, cost_tracker,
-│                    #   event_bus, ga4_tracker, asset_registry, phantom_tracker,
-│                    #   signal_tracker, regime_classifier, earnings_calendar,
+│                    #   tiger_executor, paper_executor, broker_sync, heartbeat, logger,
+│                    #   self_optimizer, cost_tracker, event_bus, ga4_tracker, asset_registry,
+│                    #   phantom_tracker, signal_tracker, regime_classifier, earnings_calendar,
 │                    #   adaptive_stops, session_analyzer, confidence_calibrator,
 │                    #   phantom_analyzer, regime_strategy)
 ├── tools/           # 5 tools (news_fetcher, market_data, technical_indicators, correlation, telegram_bot)
@@ -56,14 +56,16 @@ trading-system/
 ```
 
 ## Key Files
-- `main.py` — Entry point, scheduler, executor selection (paper/alpaca/live/ibkr)
+- `main.py` — Entry point, scheduler, executor selection (paper/alpaca/ibkr/tiger/live)
 - `core/pipeline.py` — Signal-to-execution orchestration + `update_trailing_stops()` + `check_stop_losses()` + `check_holding_periods()`
 - `core/regime_classifier.py` — Market regime detection (trending/ranging/volatile) using ADX, ATR, Bollinger, RSI
 - `core/earnings_calendar.py` — Earnings date tracking, position reduction near earnings
 - `core/signal_tracker.py` — Signal accuracy tracking (signal → trade → outcome correlation)
 - `core/alpaca_executor.py` — Alpaca paper/live trading executor
 - `core/coinbase_executor.py` — Coinbase Advanced Trade API crypto executor (BTC, ETH)
-- `core/routing_executor.py` — Smart routing: crypto→Coinbase, stocks/ETFs→Alpaca (EXECUTOR_MODE=live)
+- `core/routing_executor.py` — Smart routing: crypto→Coinbase, stocks/ETFs→Alpaca, SGX→IBKR (EXECUTOR_MODE=live)
+- `core/tiger_executor.py` — Tiger Brokers executor for SGX/US/HK stocks (tigeropen SDK)
+- `core/broker_sync.py` — Broker reconciliation engine: detect ghosts, orphans, qty mismatches
 - `core/cost_tracker.py` — LLM cost tracking with JSON persistence + daily budget limits (`check_budget()`)
 - `core/event_bus.py` — Real-time pub/sub for dashboard WebSocket + sync listeners
 - `core/ga4_tracker.py` — GA4 Measurement Protocol server-side event tracking
@@ -124,8 +126,12 @@ sudo htpasswd /etc/nginx/.htpasswd trader  # Reset dashboard password
 ## Environment Variables
 All API keys in `.env` (never committed). See `.env.example` for template.
 Required: DEEPSEEK_API_KEY, ANTHROPIC_API_KEY, TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID
-Required: ALPACA_API_KEY, ALPACA_SECRET_KEY, ALPACA_BASE_URL, EXECUTOR_MODE
-Required (live mode): COINBASE_API_KEY, COINBASE_API_SECRET
+Required: EXECUTOR_MODE (paper/alpaca/ibkr/tiger/live)
+Required (alpaca): ALPACA_API_KEY, ALPACA_SECRET_KEY, ALPACA_BASE_URL
+Required (ibkr): IBKR_HOST, IBKR_PAPER_PORT, IBKR_CLIENT_ID, IBKR_PAPER_MODE
+Required (tiger): TIGER_ID, TIGER_PRIVATE_KEY, TIGER_ACCOUNT, TIGER_PAPER_MODE
+Required (live mode): COINBASE_API_KEY, COINBASE_API_SECRET (+ Alpaca keys)
+Optional: BROKER_SYNC_AUTO_FIX (true/false — auto-fix portfolio-broker discrepancies)
 Optional: KIMI_API_KEY (disabled), GOOGLE_API_KEY (fallback), ALPHA_VANTAGE_API_KEY, CRYPTOCOMPARE_API_KEY
 Optional: DASHBOARD_PORT (default 8080), DASHBOARD_ALLOWED_ORIGINS, GA4_MEASUREMENT_ID, GA4_API_SECRET
 
@@ -219,10 +225,32 @@ Optional: DASHBOARD_PORT (default 8080), DASHBOARD_ALLOWED_ORIGINS, GA4_MEASUREM
 - **Market orders only**: CoinbaseExecutor supports market orders only. No stop/limit orders — the software stop-loss monitor handles stops.
 - **Singapore crypto restriction**: Alpaca cannot legally execute crypto for Singapore residents. Use `EXECUTOR_MODE=live` to route crypto→Coinbase, stocks/ETFs→Alpaca.
 
+### Tiger Brokers
+- **SDK**: `pip install tigeropen` — RSA keypair auth (PKCS#1 format, NOT PKCS#8)
+- **Auth**: Register at https://quant.itigerup.com/#developer → generate RSA keypair → submit public key → receive `tiger_id`
+- **Paper trading**: Supports US, HK, China A-shares. **SGX paper trading NOT confirmed** — may require funded live account.
+- **Stop orders supported**: Unlike Alpaca crypto, Tiger supports native stop/stop-limit/trailing stop orders.
+- **Order types**: market, limit, stop, stop-limit, trailing stop, bracket
+- **Markets**: US (NASDAQ, NYSE), HK (HKEX), Singapore (SGX), China A-shares
+- **Executor**: `core/tiger_executor.py` — activated via `EXECUTOR_MODE=tiger`
+
+### Broker Reconciliation
+- **BrokerReconciler** (`core/broker_sync.py`): Compares internal portfolio against broker positions every heartbeat cycle (5 min)
+- **Ghost detection**: Broker has position, internal doesn't → auto-creates internal entry with default stops
+- **Orphan detection**: Internal has position, broker doesn't → removes stale internal entry
+- **Qty mismatch**: Adjusts internal quantities to match broker (FIFO for over-tracked, newest-adjust for under-tracked)
+- **Auto-fix**: Controlled by `BROKER_SYNC_AUTO_FIX=true` in `.env` — off by default, enable for paper trading
+- **Pending order handling**: `close_position()` cancels pending orders for symbol before DELETE; skips close if orders stuck in `pending_cancel`
+
 ### Multi-Tenant Deployment
 - Each user gets their own VPS with their own `.env` file (same git repo)
-- `EXECUTOR_MODE` controls which executors are active per instance
-- API keys (Alpaca, Coinbase, LLM, Telegram) are all per-user via `.env`
+- `EXECUTOR_MODE` controls which broker per tenant:
+  - `paper` — simulated fills (no broker needed)
+  - `alpaca` — Alpaca paper/live (US stocks, ETFs, crypto)
+  - `ibkr` — Interactive Brokers (US, SGX, HK, global)
+  - `tiger` — Tiger Brokers (US, SGX, HK, China A-shares)
+  - `live` — RoutingExecutor (crypto→Coinbase, stocks→Alpaca, SGX→IBKR)
+- API keys (Alpaca, IBKR, Tiger, Coinbase, LLM, Telegram) are all per-user via `.env`
 - GA tracking: use a separate Google Analytics property per user
 - Data files (`data/`) are per-VPS, no namespacing needed
 
