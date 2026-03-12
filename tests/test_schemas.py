@@ -174,7 +174,7 @@ class TestExecutionOrder:
 class TestOrderConfirmation:
     def test_filled_order(self):
         conf = OrderConfirmation(
-            order_id=12345,
+            order_id="12345",
             asset="BTC",
             direction=Direction.LONG,
             quantity=0.001,

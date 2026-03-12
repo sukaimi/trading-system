@@ -36,6 +36,13 @@ class RiskManager:
         self.base_risk_per_trade_pct: float = config.get("base_risk_per_trade_pct", 2.0)
         self.max_portfolio_avg_correlation: float = config.get("max_portfolio_avg_correlation", 0.6)
 
+        # Graduated correlation system
+        self.correlation_hard_cap: float = config.get("correlation_hard_cap", 0.85)
+        self.correlation_soft_cap: float = config.get("correlation_soft_cap", self.max_correlation)
+        self.correlation_high_conviction_threshold: float = config.get("correlation_high_conviction_threshold", 0.75)
+        self.correlation_max_highly_correlated: int = config.get("correlation_max_highly_correlated", 3)
+        self.correlation_sector_exempt: bool = config.get("correlation_sector_exempt", True)
+
         # Correlation cache: {frozenset(assets): {"matrix": ..., "timestamp": ...}}
         self._correlation_cache: dict[str, Any] = {}
         self._correlation_ttl: int = 3600  # 1 hour
@@ -112,8 +119,9 @@ class RiskManager:
                     None,
                 )
 
-        # Check 8: Correlation limit — reject if too correlated with existing positions
-        corr_ok, corr_reason = self._check_correlation(asset, open_positions)
+        # Check 8: Correlation limit — graduated 4-layer system
+        confidence = execution_order.get("confidence", 0.5)
+        corr_ok, corr_reason = self._check_correlation(asset, open_positions, confidence)
         if not corr_ok:
             return False, corr_reason, None
 
@@ -168,9 +176,16 @@ class RiskManager:
             return "unknown"
 
     def _check_correlation(
-        self, asset: str, open_positions: list[dict[str, Any]]
+        self, asset: str, open_positions: list[dict[str, Any]], confidence: float = 0.5
     ) -> tuple[bool, str]:
         """Check if new asset is too correlated with existing portfolio.
+
+        Uses a graduated 4-layer system:
+        1. Hard cap (0.85): reject if ANY pairwise correlation exceeds this
+        2. Sector exemption: new sector skips soft cap (still subject to hard cap)
+        3. Conviction-scaled soft cap: count positions above soft cap, reject if
+           count > max_highly_correlated unless confidence >= high_conviction_threshold
+        4. Portfolio average warning: logging only (non-blocking)
 
         Uses cached correlation data (1-hour TTL) to avoid re-fetching prices
         on every validate_order call. Gracefully approves if price data is
@@ -224,8 +239,9 @@ class RiskManager:
                 log.info("Correlation check: insufficient data for %s — approved", asset)
                 return True, ""
 
-            # Check pairwise correlation with each held asset
-            all_correlations: list[float] = []
+            # Compute pairwise correlations with each held asset
+            pairwise: list[tuple[str, float]] = []  # (held_asset, correlation)
+            all_abs_correlations: list[float] = []
             for held in held_assets:
                 if held == asset:
                     continue  # Skip self-correlation (add-to-position allowed by Check 5)
@@ -233,19 +249,60 @@ class RiskManager:
                 if len(held_series) < 5:
                     continue
                 corr = analyzer.pairwise_correlation(candidate_series, held_series)
-                abs_corr = abs(corr)
-                all_correlations.append(abs_corr)
+                pairwise.append((held, corr))
+                all_abs_correlations.append(abs(corr))
 
-                if corr > self.max_correlation:
+            # ── Layer 1: Hard cap — reject if ANY pair exceeds hard cap ──
+            for held, corr in pairwise:
+                if corr > self.correlation_hard_cap:
                     return (
                         False,
                         f"Correlation limit: {asset} vs {held} correlation {corr:.2f} "
-                        f"exceeds max {self.max_correlation}",
+                        f"exceeds hard cap {self.correlation_hard_cap}",
                     )
 
-            # Portfolio-level average correlation warning (don't reject)
-            if all_correlations:
-                avg_corr = sum(all_correlations) / len(all_correlations)
+            # ── Layer 2: Sector exemption ────────────────────────────────
+            if self.correlation_sector_exempt:
+                candidate_sector = self._get_sector(asset)
+                if candidate_sector and candidate_sector != "unknown":
+                    portfolio_sectors = {
+                        self._get_sector(pos.get("asset", ""))
+                        for pos in open_positions
+                        if pos.get("asset")
+                    }
+                    portfolio_sectors.discard("unknown")
+                    portfolio_sectors.discard("")
+                    if candidate_sector not in portfolio_sectors:
+                        log.info(
+                            "Correlation check: %s sector '%s' not in portfolio — sector exempt, approved",
+                            asset, candidate_sector,
+                        )
+                        return True, ""
+
+            # ── Layer 3: Conviction-scaled soft cap ──────────────────────
+            highly_correlated_count = sum(
+                1 for _, corr in pairwise if corr > self.correlation_soft_cap
+            )
+            if highly_correlated_count > self.correlation_max_highly_correlated:
+                if confidence >= self.correlation_high_conviction_threshold:
+                    log.info(
+                        "Correlation check: %s has %d positions above soft cap %.2f, "
+                        "but confidence %.2f >= %.2f — high conviction override, approved",
+                        asset, highly_correlated_count, self.correlation_soft_cap,
+                        confidence, self.correlation_high_conviction_threshold,
+                    )
+                else:
+                    return (
+                        False,
+                        f"Correlation limit: {asset} has {highly_correlated_count} positions "
+                        f"correlated above {self.correlation_soft_cap} "
+                        f"(max {self.correlation_max_highly_correlated}) "
+                        f"and confidence {confidence:.2f} < {self.correlation_high_conviction_threshold}",
+                    )
+
+            # ── Layer 4: Portfolio average warning (non-blocking) ────────
+            if all_abs_correlations:
+                avg_corr = sum(all_abs_correlations) / len(all_abs_correlations)
                 if avg_corr > self.max_portfolio_avg_correlation:
                     log.warning(
                         "CORRELATION WARNING: portfolio avg correlation with %s is %.2f "

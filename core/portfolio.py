@@ -223,12 +223,13 @@ class PortfolioState:
             self.daily_pnl_pct = (
                 (self.daily_pnl / self.equity) * 100 if self.equity > 0 else 0.0
             )
-            if pnl >= 0:
+            if pnl > 0:
                 self.total_wins += 1
                 self.consecutive_losses = 0
-            else:
+            elif pnl < 0:
                 self.total_losses += 1
                 self.consecutive_losses += 1
+            # pnl == 0 (e.g. stale cleanup): count as trade but not win/loss
             self.last_updated = datetime.utcnow().isoformat()
         event_bus.emit("portfolio", "updated", self.snapshot())
 

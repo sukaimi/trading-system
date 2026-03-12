@@ -2412,6 +2412,7 @@ class TradingPipeline:
             "stop_loss": stop_loss,
             "take_profit": take_profit,
             "position_size_pct": position_pct,
+            "confidence": confidence,
             "regime": regime,
             "regime_confidence": regime_info.get("confidence", 0.5),
             "regime_stop_multiplier": regime_stop_mult,
