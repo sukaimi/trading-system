@@ -1,5 +1,5 @@
 {
-  "min_confidence_for_trade": 0.20,
+  "min_confidence_for_trade": 0.4,
   "max_open_positions": 10,
   "signal_weights": {
     "fundamental": 0.35,
@@ -18,5 +18,5 @@
     "SPY": 0.10,
     "META": 0.05
   },
-  "min_risk_reward_ratio": 0.8
+  "min_risk_reward_ratio": 2.0
 }

@@ -2,7 +2,7 @@
   "max_position_pct": 5.0,
   "max_daily_loss_pct": 3.0,
   "max_total_drawdown_pct": 15.0,
-  "max_open_positions": 38,
+  "max_open_positions": 20,
   "max_exposure_ratio": 0.30,
   "max_correlation": 0.65,
   "correlation_hard_cap": 0.85,

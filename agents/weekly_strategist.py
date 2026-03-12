@@ -60,6 +60,42 @@ REVIEW_PROMPT = """Conduct your weekly strategy review based on the following da
 === WEEK ENDING ===
 {week_ending}
 
+=== PARAMETER BOUNDS (HARD LIMITS) ===
+All parameter changes MUST respect these bounds. Values outside these ranges will be rejected.
+
+risk_params:
+  max_open_positions: [3, 25] (integer)
+  max_position_pct: [2.0, 15.0]
+  max_daily_loss_pct: [1.0, 10.0]
+  max_total_drawdown_pct: [5.0, 30.0]
+  default_stop_loss_pct: [1.0, 10.0]
+  default_take_profit_pct: [2.0, 15.0]
+  base_risk_per_trade_pct: [0.5, 5.0]
+  max_exposure_ratio: [0.10, 0.60]
+
+market_analyst:
+  min_confidence_for_trade: [0.15, 0.60]
+  max_open_positions: [3, 25] (integer)
+  min_risk_reward_ratio: [1.0, 4.0]
+
+news_scout:
+  min_signal_threshold: [0.20, 0.50]
+  scan_frequency_minutes: [10, 60] (integer)
+  max_alerts_per_hour: [3, 25] (integer)
+  weekend_signal_penalty: [0.0, 0.30]
+
+devils_advocate:
+  min_challenges_for_kill: [2, 7] (integer)
+  target_kill_rate_pct: [10, 50] (integer)
+  target_false_kill_rate_pct: [10, 40] (integer)
+
+RULES:
+- Integer parameters MUST be whole numbers (not 5.0, use 5)
+- No parameter may change more than 30% from its current value in a single review
+- market_analyst.max_open_positions SHOULD match risk_params.max_open_positions
+- For nested params with dotted keys like "confidence_size_map.0.4-0.5", use the FULL key after the first dot
+- Maximum 8 parameter changes per review
+
 Produce a JSON response with this exact structure:
 {{
   "week_reviewed": "{week_ending}",
@@ -82,7 +118,7 @@ Produce a JSON response with this exact structure:
   "risk_adjustments": {{}}
 }}
 
-Valid targets: "news_scout", "market_analyst", "devils_advocate", "risk"
+Valid targets: "news_scout", "market_analyst", "devils_advocate", "risk" (maps to {{target}}_params.json)
 Use dot-notation for nested params (e.g., "signal_weights.central_bank").
 If no changes needed, return empty parameter_changes array.
 ONLY recommend changes supported by evidence from this week's data."""

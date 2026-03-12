@@ -1,5 +1,5 @@
 {
-  "version": 53,
-  "last_updated": "2026-03-08T13:15:00.000000",
-  "notes": "v53: Liquidity sweep detection + volume anomaly scoring in proactive scan"
+  "version": 54,
+  "last_updated": "2026-03-12T20:00:00.000000",
+  "notes": "v54: SelfOptimizer hardened — bounds validation, type coercion, dedup, dotted-key fix"
 }

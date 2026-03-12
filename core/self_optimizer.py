@@ -7,6 +7,7 @@ Sends Telegram notification after applying changes.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 from datetime import datetime, timezone
@@ -23,6 +24,37 @@ OPT_LOG_FILE = os.path.join(DATA_DIR, "optimization_log.json")
 VERSION_FILE = os.path.join(CONFIG_DIR, "strategy_version.json")
 DIRECTIVES_FILE = os.path.join(DATA_DIR, "data_driven_directives.json")
 PRINCIPLE_LIBRARY_FILE = os.path.join(DATA_DIR, "principle_library.json")
+APPLIED_DIRECTIVES_FILE = os.path.join(DATA_DIR, "applied_directives.json")
+
+# Bounds for critical parameters — values are (min, max) inclusive.
+PARAMETER_BOUNDS: dict[str, dict[str, tuple[float, float]]] = {
+    "risk": {
+        "max_open_positions": (3, 25),
+        "max_position_pct": (2.0, 15.0),
+        "max_daily_loss_pct": (1.0, 10.0),
+        "max_total_drawdown_pct": (5.0, 30.0),
+        "default_stop_loss_pct": (1.0, 10.0),
+        "default_take_profit_pct": (2.0, 15.0),
+        "base_risk_per_trade_pct": (0.5, 5.0),
+        "max_exposure_ratio": (0.10, 0.60),
+    },
+    "market_analyst": {
+        "min_confidence_for_trade": (0.15, 0.60),
+        "max_open_positions": (3, 25),
+        "min_risk_reward_ratio": (1.0, 4.0),
+    },
+    "news_scout": {
+        "min_signal_threshold": (0.20, 0.50),
+        "scan_frequency_minutes": (10, 60),
+        "max_alerts_per_hour": (3, 25),
+        "weekend_signal_penalty": (0.0, 0.30),
+    },
+    "devils_advocate": {
+        "min_challenges_for_kill": (2, 7),
+        "target_kill_rate_pct": (10, 50),
+        "target_false_kill_rate_pct": (10, 40),
+    },
+}
 
 # Learning system data files (read-only — produced by each learning module)
 _LEARNING_FILES = {
@@ -55,32 +87,44 @@ class SelfOptimizer:
         Returns:
             List of change records applied.
         """
+        param_changes = weekly_directive.get("parameter_changes", [])
+
+        # Deduplicate: compute fingerprint of the parameter changes
+        fingerprint = self._directive_fingerprint(param_changes)
+        if self._is_directive_applied(fingerprint):
+            log.info("Directive fingerprint %s already applied — skipping", fingerprint[:12])
+            return []
+
         changes_applied: list[dict[str, Any]] = []
 
-        for change in weekly_directive.get("parameter_changes", []):
+        for change in param_changes:
             target_agent = change["target"]
             param_path = change["parameter"]
             new_value = change["new_value"]
             old_value = change["old_value"]
 
             self._update_config(target_agent, param_path, new_value)
-            version = self._increment_version()
 
             changes_applied.append(
                 {
-                    "timestamp": datetime.utcnow().isoformat(),
+                    "timestamp": datetime.now(timezone.utc).isoformat(),
                     "agent": target_agent,
                     "parameter": param_path,
                     "old_value": old_value,
                     "new_value": new_value,
                     "reason": change.get("reason", ""),
                     "directive_source": weekly_directive.get("week_reviewed", ""),
-                    "version": version,
                 }
             )
 
         if changes_applied:
+            # Increment version ONCE per review (not per parameter)
+            version = self._increment_version()
+            for rec in changes_applied:
+                rec["version"] = version
+
             self._append_to_log(changes_applied, weekly_directive)
+            self._record_directive_fingerprint(fingerprint)
             log.info("Applied %d parameter changes", len(changes_applied))
 
             # Send Telegram notification
@@ -91,6 +135,37 @@ class SelfOptimizer:
                     log.error("Failed to send optimization summary: %s", e)
 
         return changes_applied
+
+    # ── Directive deduplication ──────────────────────────────────────────
+
+    @staticmethod
+    def _directive_fingerprint(param_changes: list[dict[str, Any]]) -> str:
+        """Compute a stable hash fingerprint for a list of parameter changes."""
+        canonical = json.dumps(param_changes, sort_keys=True, default=str)
+        return hashlib.sha256(canonical.encode()).hexdigest()
+
+    def _is_directive_applied(self, fingerprint: str) -> bool:
+        """Check if a directive fingerprint was already applied."""
+        applied = self._read_json_safe(APPLIED_DIRECTIVES_FILE)
+        if not applied or not isinstance(applied, list):
+            return False
+        return fingerprint in applied
+
+    def _record_directive_fingerprint(self, fingerprint: str) -> None:
+        """Record a directive fingerprint as applied."""
+        os.makedirs(DATA_DIR, exist_ok=True)
+        applied = self._read_json_safe(APPLIED_DIRECTIVES_FILE)
+        if not applied or not isinstance(applied, list):
+            applied = []
+        applied.append(fingerprint)
+        # Keep last 200 fingerprints to avoid unbounded growth
+        applied = applied[-200:]
+        try:
+            with open(APPLIED_DIRECTIVES_FILE, "w") as f:
+                json.dump(applied, f, indent=2)
+                f.write("\n")
+        except OSError as e:
+            log.error("Failed to record directive fingerprint: %s", e)
 
     # ── Learning system integration ─────────────────────────────────────
 
@@ -420,6 +495,7 @@ class SelfOptimizer:
         try:
             with open(DIRECTIVES_FILE, "w") as f:
                 json.dump(payload, f, indent=2, default=str)
+                f.write("\n")
             log.info("Persisted %d directives to %s", len(directives), DIRECTIVES_FILE)
         except OSError as e:
             log.error("Failed to persist directives: %s", e)
@@ -523,6 +599,7 @@ class SelfOptimizer:
         try:
             with open(PRINCIPLE_LIBRARY_FILE, "w") as f:
                 json.dump(library, f, indent=2, default=str)
+                f.write("\n")
             log.info("Saved %d principles to library (total: %d)", len(principles), len(library))
         except OSError as e:
             log.error("Failed to save principles: %s", e)
@@ -559,17 +636,75 @@ class SelfOptimizer:
         with open(config_file) as f:
             config = json.load(f)
 
-        # Navigate nested path (e.g., "signal_weights.regulatory_crypto")
-        keys = param_path.split(".")
-        obj = config
-        for key in keys[:-1]:
-            obj = obj.setdefault(key, {})
-        obj[keys[-1]] = value
+        # Resolve path (handles dotted keys like "0.4-0.5")
+        obj, final_key = self._resolve_path(config, param_path)
+
+        # Type coercion: preserve original types
+        original = obj.get(final_key)
+        value = self._coerce_type(value, original)
+
+        # Bounds check
+        value = self._check_bounds(agent, param_path, value)
+
+        obj[final_key] = value
 
         with open(config_file, "w") as f:
             json.dump(config, f, indent=2)
+            f.write("\n")
 
         log.info("Updated %s.%s = %s", agent, param_path, value)
+
+    def _resolve_path(self, config: dict, param_path: str) -> tuple[dict, str]:
+        """Resolve a param_path to (parent_dict, final_key), handling dotted keys like '0.4-0.5'."""
+        parts = param_path.split(".")
+        obj = config
+        i = 0
+        while i < len(parts) - 1:
+            key = parts[i]
+            if key not in obj:
+                obj[key] = {}
+            obj = obj[key]
+            if isinstance(obj, dict):
+                # Try joining remaining parts as a single key (handles "0.4-0.5")
+                remainder = ".".join(parts[i + 1:])
+                if remainder in obj:
+                    return obj, remainder
+            i += 1
+        return obj, parts[-1]
+
+    def _coerce_type(self, value: Any, original: Any) -> Any:
+        """Coerce value to match the original's type (int stays int, etc.)."""
+        if original is None:
+            return value
+        if isinstance(original, int) and not isinstance(original, bool):
+            try:
+                return int(value)
+            except (TypeError, ValueError):
+                return value
+        if isinstance(original, float):
+            try:
+                return float(value)
+            except (TypeError, ValueError):
+                return value
+        return value
+
+    def _check_bounds(self, agent: str, param_path: str, value: Any) -> Any:
+        """Clamp value to allowed bounds if defined. Returns clamped value."""
+        bounds = PARAMETER_BOUNDS.get(agent, {})
+        # Use the leaf key for bounds lookup
+        leaf_key = param_path.split(".")[-1] if "." in param_path else param_path
+        # Also try the full path
+        min_max = bounds.get(param_path) or bounds.get(leaf_key)
+        if min_max and isinstance(value, (int, float)):
+            lo, hi = min_max
+            clamped = max(lo, min(hi, value))
+            if clamped != value:
+                log.warning(
+                    "Clamped %s.%s from %s to %s (bounds: [%s, %s])",
+                    agent, param_path, value, clamped, lo, hi,
+                )
+            return clamped
+        return value
 
     def _increment_version(self) -> int:
         """Increment and return the strategy version number."""
@@ -580,10 +715,11 @@ class SelfOptimizer:
             v = {"version": 0}
 
         v["version"] += 1
-        v["last_updated"] = datetime.utcnow().isoformat()
+        v["last_updated"] = datetime.now(timezone.utc).isoformat()
 
         with open(VERSION_FILE, "w") as f:
             json.dump(v, f, indent=2)
+            f.write("\n")
 
         return v["version"]
 
@@ -613,7 +749,7 @@ class SelfOptimizer:
         log_entries.append(
             {
                 "version": changes[-1]["version"] if changes else 0,
-                "timestamp": datetime.utcnow().isoformat(),
+                "timestamp": datetime.now(timezone.utc).isoformat(),
                 "directive_week": directive.get("week_reviewed", ""),
                 "changes": changes,
                 "portfolio_value_at_change": portfolio_value,
@@ -623,6 +759,7 @@ class SelfOptimizer:
 
         with open(OPT_LOG_FILE, "w") as f:
             json.dump(log_entries, f, indent=2)
+            f.write("\n")
 
     def rollback(self, version_to_restore: int) -> bool:
         """Restore parameters from a previous version.

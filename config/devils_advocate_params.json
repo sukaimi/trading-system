@@ -2,7 +2,7 @@
   "kill_thresholds": {
     "min_challenges_for_kill": 3,
     "crowded_trade_kill_score": 0.8,
-    "max_correlation_post_trade": 0.50
+    "max_correlation_post_trade": 0.5
   },
   "challenge_weights": {
     "crowded_trade": 1.0,
