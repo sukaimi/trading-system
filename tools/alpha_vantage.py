@@ -53,7 +53,7 @@ CACHE_TTL_SECTOR = 4 * 3600     # 4 hours
 
 # Rate limits
 MAX_CALLS_PER_MINUTE = 25
-MAX_CALLS_PER_DAY = 450  # Leave 50-call buffer from 500 free tier
+MAX_CALLS_PER_DAY = 20  # Free tier allows 25/day — keep 5-call buffer
 
 
 class AlphaVantageClient:

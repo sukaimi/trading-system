@@ -130,6 +130,9 @@ class NewsFetcher:
         feed = feedparser.parse(
             feed_url, agent=self._session.headers["User-Agent"]
         )
+        if getattr(feed, "bozo", False):
+            log.warning("RSS feed may be broken (bozo): %s — %s",
+                        feed_url[:50], getattr(feed, "bozo_exception", "unknown"))
         articles = []
         for entry in feed.get("entries", []):
             articles.append(

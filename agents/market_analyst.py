@@ -257,18 +257,24 @@ class MarketAnalyst:
             cs_data = llm_result.get("confirming_signals", {})
             if not isinstance(cs_data, dict):
                 cs_data = {}
+            def _as_dict(val):
+                """Ensure confirming signal value is a dict (LLM may return list)."""
+                if isinstance(val, list):
+                    return val[0] if val and isinstance(val[0], dict) else {}
+                return val if isinstance(val, dict) else {}
+
             confirming = ConfirmingSignals(
                 fundamental=ConfirmingSignal(
-                    present=cs_data.get("fundamental", {}).get("present", False),
-                    description=cs_data.get("fundamental", {}).get("description", ""),
+                    present=_as_dict(cs_data.get("fundamental", {})).get("present", False),
+                    description=_as_dict(cs_data.get("fundamental", {})).get("description", ""),
                 ),
                 technical=ConfirmingSignal(
-                    present=cs_data.get("technical", {}).get("present", False),
-                    description=cs_data.get("technical", {}).get("description", ""),
+                    present=_as_dict(cs_data.get("technical", {})).get("present", False),
+                    description=_as_dict(cs_data.get("technical", {})).get("description", ""),
                 ),
                 cross_asset=ConfirmingSignal(
-                    present=cs_data.get("cross_asset", {}).get("present", False),
-                    description=cs_data.get("cross_asset", {}).get("description", ""),
+                    present=_as_dict(cs_data.get("cross_asset", {})).get("present", False),
+                    description=_as_dict(cs_data.get("cross_asset", {})).get("description", ""),
                 ),
             )
 
@@ -291,7 +297,9 @@ class MarketAnalyst:
                 invalidation_level=llm_result.get("invalidation_level", ""),
                 time_horizon=self._parse_time_horizon(llm_result.get("time_horizon", "1-3 days")),
                 suggested_position_pct=float(
-                    llm_result.get("suggested_position_pct", default_size)
+                    (lambda v: default_size if str(v).strip().rstrip('%').upper() in ('N/A', 'NONE', '') else str(v).strip().rstrip('%'))(
+                        llm_result.get("suggested_position_pct", default_size)
+                    )
                 ),
                 risk_reward_ratio=str(llm_result.get("risk_reward_ratio", "")),
                 supporting_data=llm_result.get("supporting_data", tech_data)
@@ -301,7 +309,7 @@ class MarketAnalyst:
                 triggering_alert_id=str(id(signal)),
             )
             return thesis
-        except (ValueError, KeyError) as e:
+        except (ValueError, KeyError, AttributeError) as e:
             log.warning("Failed to build thesis: %s", e)
             return None
 

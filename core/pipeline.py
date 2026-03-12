@@ -1481,19 +1481,14 @@ class TradingPipeline:
                 pos.get("asset") for pos in self._portfolio.open_positions
             }
 
-            # Filter out assets we already hold
-            scan_assets = [a for a in assets if a not in held_assets]
+            # Scan all assets — unheld first (new opportunity), then held (reversal/add)
+            unheld = [a for a in assets if a not in held_assets]
+            held = [a for a in assets if a in held_assets]
+            scan_assets = unheld + held
             log.info(
-                "Proactive scan: %d assets to scan (%d held, skipped)",
-                len(scan_assets), len(held_assets),
+                "Proactive scan: %d assets (%d unheld priority, %d held)",
+                len(scan_assets), len(unheld), len(held),
             )
-
-            if not scan_assets:
-                log.info("Proactive scan: no assets to scan (all held)")
-                event_bus.emit("pipeline", "proactive_scan_complete", {
-                    "scanned": 0, "signals": 0, "theses": 0,
-                })
-                return []
 
             mdf = MarketDataFetcher()
             ti = self._analyst._ti
