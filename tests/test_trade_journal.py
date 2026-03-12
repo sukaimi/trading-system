@@ -78,7 +78,7 @@ def sample_verdict():
 @pytest.fixture
 def sample_confirmation():
     return OrderConfirmation(
-        order_id=42,
+        order_id="42",
         asset="BTC",
         direction=Direction.LONG,
         quantity=0.01,

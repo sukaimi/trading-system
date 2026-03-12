@@ -26,6 +26,7 @@ from core.executor import Executor
 from core.llm_client import LLMClient
 from core.logger import setup_logger
 from core.phantom_tracker import PhantomTracker
+from core.postmortem import PostMortemEngine
 from core.signal_tracker import SignalAccuracyTracker
 from core.portfolio import PortfolioState
 from core import vault_writer
@@ -42,6 +43,7 @@ from core.schemas import (
 from core.self_optimizer import SelfOptimizer
 from core.confidence_calibrator import ConfidenceCalibrator
 from core.earnings_calendar import EarningsCalendar
+from core.kelly_sizer import KellySizer
 from core.regime_classifier import RegimeClassifier
 from core.regime_strategy import RegimeStrategySelector
 from core.session_analyzer import SessionAnalyzer
@@ -85,6 +87,7 @@ class TradingPipeline:
             telegram=self._telegram,
         )
         self._phantom = PhantomTracker()
+        self._postmortem = PostMortemEngine(llm_client=self._llm, telegram=self._telegram)
         self._signal_tracker = SignalAccuracyTracker()
         self._regime_classifier = RegimeClassifier(market_data_fetcher=MarketDataFetcher())
         self._earnings_cal = EarningsCalendar()
@@ -117,6 +120,10 @@ class TradingPipeline:
                 self._risk_params = json.loads(params_path.read_text())
         except Exception as e:
             log.warning("Could not load risk_params.json: %s", e)
+
+        # Kelly Criterion position sizer (Tier 0 — pure Python)
+        journal_file = str(Path(__file__).resolve().parent.parent / "data" / "trade_journal.json")
+        self._kelly = KellySizer(journal_file=journal_file, config=self._risk_params)
 
         # Track deferred close attempts (log once per asset, not every heartbeat)
         self._deferred_closes: set[str] = set()
@@ -380,6 +387,14 @@ class TradingPipeline:
                         )
                 except Exception as e:
                     log.debug("Correlation computation skipped: %s", e)
+
+            # Inject prevention rules from past losing trades
+            try:
+                prevention_rules = self._postmortem.get_relevant_rules(thesis.asset)
+                if prevention_rules:
+                    portfolio_state["prevention_rules"] = prevention_rules
+            except Exception as e:
+                log.debug("Prevention rule injection skipped: %s", e)
 
             verdict = self._devil.challenge(thesis, portfolio_state)
         except Exception as e:
@@ -979,6 +994,7 @@ class TradingPipeline:
 
             # Extract principles from this closed trade
             self._extract_trade_principles(trade_id)
+            self._run_postmortem(trade_id, pnl)
 
             try:
                 self._telegram.send_alert(
@@ -1146,6 +1162,7 @@ class TradingPipeline:
 
             # Extract principles from this closed trade
             self._extract_trade_principles(trade_id)
+            self._run_postmortem(trade_id, pnl)
 
             try:
                 self._telegram.send_alert(
@@ -1328,6 +1345,7 @@ class TradingPipeline:
 
             # Extract principles from this closed trade
             self._extract_trade_principles(trade_id)
+            self._run_postmortem(trade_id, pnl)
 
             try:
                 self._telegram.send_alert(
@@ -1414,6 +1432,32 @@ class TradingPipeline:
                 self._optimizer.save_principles(principles, closed_trade)
         except Exception as e:
             log.error("Principle extraction failed for %s: %s", trade_id, e)
+
+    def _run_postmortem(self, trade_id: str, pnl: float) -> None:
+        """Run post-mortem analysis on losing trades.
+
+        Non-blocking: failures are logged but do not affect trade flow.
+        Only triggers for trades with negative P&L.
+        """
+        if pnl >= 0:
+            return
+        try:
+            journal_path = Path(__file__).resolve().parent.parent / "data" / "trade_journal.json"
+            if not journal_path.exists():
+                return
+            with open(journal_path) as f:
+                entries = json.load(f)
+
+            closed_trade = None
+            for entry in entries:
+                if isinstance(entry, dict) and entry.get("trade_id") == trade_id and entry.get("outcome"):
+                    closed_trade = entry
+                    break
+
+            if closed_trade:
+                self._postmortem.run_postmortem(closed_trade)
+        except Exception as e:
+            log.error("Post-mortem failed for %s: %s", trade_id, e)
 
     def run_proactive_scan(self) -> list[dict[str, Any]]:
         """Proactively evaluate all assets for trade setups based on technicals + regime.
@@ -2210,6 +2254,31 @@ class TradingPipeline:
             # Negative EV — still take micro position during paper trading for data
             position_pct = 2.0
             log.info("Negative EV (%.4f) — micro position 2%% for data", ev_result["ev"])
+
+        # ── Kelly Criterion position sizing (historical trade data) ────────
+        try:
+            kelly_result = self._kelly.kelly_fraction(thesis.asset)
+            if kelly_result["source"] != "insufficient_data" and self._risk_params.get("kelly_enabled", True):
+                kelly_frac = kelly_result["fraction"]
+                kelly_stats = kelly_result["stats"]
+                position_pct = max(kelly_frac * 100.0, 2.0)  # 2% floor for data collection
+                log.info(
+                    "KELLY SIZING [%s]: f*=%.3f, alpha=%.2f, fraction=%.3f, position=%.1f%% (p=%.2f, b=%.2f, n=%d)",
+                    kelly_result["source"],
+                    (kelly_stats.get("win_rate", 0) * kelly_stats.get("payoff_ratio", 0)
+                     - (1 - kelly_stats.get("win_rate", 0))) / max(kelly_stats.get("payoff_ratio", 1), 0.01),
+                    self._risk_params.get("kelly_alpha", 0.35),
+                    kelly_frac,
+                    position_pct,
+                    kelly_stats.get("win_rate", 0),
+                    kelly_stats.get("payoff_ratio", 0),
+                    kelly_stats.get("sample_size", 0),
+                )
+            else:
+                n = kelly_result.get("stats", {}).get("sample_size", 0)
+                log.info("KELLY FALLBACK: insufficient data (n=%d) — using suggested sizing", n)
+        except Exception as e:
+            log.debug("Kelly sizing failed for %s: %s", thesis.asset, e)
 
         # ── Consecutive loss throttling ────────────────────────────────────
         consecutive_losses = self._portfolio.consecutive_losses

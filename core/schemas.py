@@ -6,7 +6,7 @@ See TRADING_AGENT_PRD.md Section 4 for the full communication map.
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timezone
 from enum import Enum
 from typing import Optional
 
@@ -392,3 +392,48 @@ class OptimizationApplied(BaseModel):
     changes: list[OptimizationChange] = Field(default_factory=list)
     portfolio_value_at_change: float = 0.0
     cumulative_return_pct: float = 0.0
+
+
+# ── Post-Mortem Analysis ────────────────────────────────────────────
+
+class PostMortemDimension(str, Enum):
+    DATA = "data"
+    SENTIMENT = "sentiment"
+    TIMING = "timing"
+    MODEL = "model"
+    RISK = "risk"
+
+
+class PostMortemSeverity(str, Enum):
+    LOW = "low"
+    MEDIUM = "medium"
+    HIGH = "high"
+
+
+class DimensionFinding(BaseModel):
+    dimension: PostMortemDimension
+    finding: str
+    severity: PostMortemSeverity
+    prevention_rule: str
+    confidence: float = Field(ge=0.0, le=1.0)
+
+
+class PostMortemFinding(BaseModel):
+    type: str = "postmortem_finding"
+    trade_id: str
+    timestamp: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    asset: str
+    exit_reason: str = ""
+    pnl_pct: float = 0.0
+    dimensions: list[DimensionFinding] = []
+
+
+class PreventionRule(BaseModel):
+    rule_id: str
+    rule: str
+    dimension: PostMortemDimension
+    source_trade_ids: list[str] = []
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    times_matched: int = 0
+    asset_pattern: str = "ALL"
+    active: bool = True

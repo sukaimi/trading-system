@@ -287,6 +287,42 @@ async def get_regime_strategy() -> dict[str, Any]:
         return {"presets": {}, "per_asset": {}}
 
 
+@app.get("/api/kelly-stats")
+async def kelly_stats() -> dict[str, Any]:
+    """Return Kelly Criterion position sizing stats from trade journal."""
+    from core.kelly_sizer import KellySizer
+    try:
+        journal_path = os.path.join(DATA_DIR, "trade_journal.json")
+        risk_params = _read_json(os.path.join(CONFIG_DIR, "risk_params.json"), {})
+        sizer = KellySizer(journal_file=journal_path, config=risk_params)
+        return sizer.get_all_stats()
+    except Exception as e:
+        log.warning("Kelly stats fetch failed: %s", e)
+        return {"global": {}, "per_asset": {}, "per_sector": {}, "config": {}}
+
+
+@app.get("/api/postmortems")
+async def get_postmortems(limit: int = 20) -> list[dict[str, Any]]:
+    """Return recent post-mortem findings for losing trades."""
+    from core.postmortem import PostMortemEngine
+    try:
+        engine = PostMortemEngine()
+        return engine.get_recent_findings(limit=limit)
+    except Exception as e:
+        log.warning("Post-mortem findings fetch failed: %s", e)
+        return []
+
+
+@app.get("/api/prevention-rules")
+async def get_prevention_rules() -> list[dict[str, Any]]:
+    """Return active prevention rules from post-mortem analysis."""
+    rules_path = os.path.join(DATA_DIR, "prevention_rules.json")
+    data = _read_json(rules_path, [])
+    if isinstance(data, list):
+        return [r for r in data if r.get("active", True)]
+    return []
+
+
 @app.get("/api/watchlist")
 async def get_watchlist() -> dict[str, Any]:
     """Return dynamic watchlist: only assets we're actively trading (held positions).

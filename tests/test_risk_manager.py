@@ -131,3 +131,137 @@ class TestCalculatePositionSize:
         normal = rm.calculate_position_size(confidence=1.0, atr=500.0, portfolio_value=100.0)
         over = rm.calculate_position_size(confidence=1.5, atr=500.0, portfolio_value=100.0)
         assert normal == over
+
+
+class TestExposureRatio:
+    """Test Check 9: Exposure ratio gate."""
+
+    def _make_config(self, max_exposure_ratio=0.30):
+        return {
+            "max_position_pct": 7.0,
+            "max_daily_loss_pct": 5.0,
+            "max_total_drawdown_pct": 15.0,
+            "max_open_positions": 10,
+            "max_correlation": 0.50,
+            "stop_loss_atr_mult": 2.0,
+            "base_risk_per_trade_pct": 2.0,
+            "max_exposure_ratio": max_exposure_ratio,
+        }
+
+    def _make_order(self, asset="ETH"):
+        return {
+            "asset": asset,
+            "direction": "long",
+            "position_size_pct": 5.0,
+            "stop_loss": 3000.0,
+            "confidence": 0.5,
+        }
+
+    @patch.object(RiskManager, "_check_correlation", return_value=(True, ""))
+    def test_exposure_below_threshold_approved(self, mock_corr):
+        """ER=20% should be approved."""
+        rm = RiskManager(self._make_config())
+        portfolio = {
+            "equity": 10000.0,
+            "daily_pnl_pct": 0.0,
+            "drawdown_from_peak_pct": 0.0,
+            "open_positions": [
+                {"asset": "AAPL", "quantity": 10, "current_price": 200.0},  # $2000 / $10000 = 20%
+            ],
+        }
+        approved, reason, _ = rm.validate_order(self._make_order(), portfolio)
+        assert approved is True
+        assert reason == "APPROVED"
+
+    @patch.object(RiskManager, "_check_correlation", return_value=(True, ""))
+    def test_exposure_above_threshold_blocked(self, mock_corr):
+        """ER=35% should be blocked."""
+        rm = RiskManager(self._make_config())
+        portfolio = {
+            "equity": 10000.0,
+            "daily_pnl_pct": 0.0,
+            "drawdown_from_peak_pct": 0.0,
+            "open_positions": [
+                {"asset": "AAPL", "quantity": 20, "current_price": 175.0},  # $3500 / $10000 = 35%
+            ],
+        }
+        approved, reason, _ = rm.validate_order(self._make_order(), portfolio)
+        assert approved is False
+        assert "Exposure ratio" in reason
+
+    @patch.object(RiskManager, "_check_correlation", return_value=(True, ""))
+    def test_exposure_at_threshold_blocked(self, mock_corr):
+        """ER=exactly 30% should be blocked (uses >=)."""
+        rm = RiskManager(self._make_config())
+        portfolio = {
+            "equity": 10000.0,
+            "daily_pnl_pct": 0.0,
+            "drawdown_from_peak_pct": 0.0,
+            "open_positions": [
+                {"asset": "AAPL", "quantity": 20, "current_price": 150.0},  # $3000 / $10000 = 30%
+            ],
+        }
+        approved, reason, _ = rm.validate_order(self._make_order(), portfolio)
+        assert approved is False
+        assert "Exposure ratio" in reason
+
+    @patch.object(RiskManager, "_check_correlation", return_value=(True, ""))
+    def test_exposure_empty_portfolio_approved(self, mock_corr):
+        """No positions means ER=0%, should be approved."""
+        rm = RiskManager(self._make_config())
+        portfolio = {
+            "equity": 10000.0,
+            "daily_pnl_pct": 0.0,
+            "drawdown_from_peak_pct": 0.0,
+            "open_positions": [],
+        }
+        approved, reason, _ = rm.validate_order(self._make_order(), portfolio)
+        assert approved is True
+
+    @patch.object(RiskManager, "_check_correlation", return_value=(True, ""))
+    def test_exposure_zero_equity_blocked(self, mock_corr):
+        """Zero equity should be blocked (returns 999.0)."""
+        rm = RiskManager(self._make_config())
+        portfolio = {
+            "equity": 0.0,
+            "daily_pnl_pct": 0.0,
+            "drawdown_from_peak_pct": 0.0,
+            "open_positions": [
+                {"asset": "AAPL", "quantity": 10, "current_price": 150.0},
+            ],
+        }
+        approved, reason, _ = rm.validate_order(self._make_order(), portfolio)
+        assert approved is False
+        assert "Exposure ratio" in reason
+
+    @patch.object(RiskManager, "_check_correlation", return_value=(True, ""))
+    def test_exposure_missing_current_price_uses_entry(self, mock_corr):
+        """Should fall back to entry_price when current_price is missing."""
+        rm = RiskManager(self._make_config())
+        portfolio = {
+            "equity": 10000.0,
+            "daily_pnl_pct": 0.0,
+            "drawdown_from_peak_pct": 0.0,
+            "open_positions": [
+                {"asset": "AAPL", "quantity": 10, "entry_price": 200.0},  # $2000 / $10000 = 20%
+            ],
+        }
+        approved, reason, _ = rm.validate_order(self._make_order(), portfolio)
+        assert approved is True
+        assert reason == "APPROVED"
+
+    @patch.object(RiskManager, "_check_correlation", return_value=(True, ""))
+    def test_exposure_custom_config(self, mock_corr):
+        """Custom max_exposure_ratio=0.50, ER=40% should be approved."""
+        rm = RiskManager(self._make_config(max_exposure_ratio=0.50))
+        portfolio = {
+            "equity": 10000.0,
+            "daily_pnl_pct": 0.0,
+            "drawdown_from_peak_pct": 0.0,
+            "open_positions": [
+                {"asset": "AAPL", "quantity": 20, "current_price": 200.0},  # $4000 / $10000 = 40%
+            ],
+        }
+        approved, reason, _ = rm.validate_order(self._make_order(), portfolio)
+        assert approved is True
+        assert reason == "APPROVED"

@@ -32,6 +32,7 @@ def risk_config():
         "max_correlation": 0.50,
         "stop_loss_atr_mult": 2.0,
         "base_risk_per_trade_pct": 2.0,
+        "max_exposure_ratio": 0.30,
     }
 
 
@@ -39,9 +40,9 @@ def risk_config():
 def sample_portfolio_state():
     """A healthy portfolio state with one open position."""
     return {
-        "equity": 100.0,
-        "initial_capital": 100.0,
-        "peak_equity": 105.0,
+        "equity": 50000.0,
+        "initial_capital": 50000.0,
+        "peak_equity": 52500.0,
         "open_positions": [
             {
                 "trade_id": "trade_001",

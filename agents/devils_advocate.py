@@ -134,6 +134,18 @@ class DevilsAdvocate:
         phantom_context = self._load_phantom_context()
         if phantom_context:
             prompt += f"\n\n{phantom_context}"
+
+        # Append prevention rules from past losing trades
+        prevention_rules = portfolio_state.get("prevention_rules", [])
+        if prevention_rules:
+            rules_text = "\n".join(f"- {rule}" for rule in prevention_rules)
+            prompt += (
+                f"\n\nPREVENTION RULES FROM PAST LOSSES:\n"
+                f"These rules were extracted from previous losing trades on this or similar assets.\n"
+                f"Consider them as additional challenges — if any are relevant, flag them explicitly:\n"
+                f"{rules_text}"
+            )
+
         result = self._llm.call_deepseek(prompt, SYSTEM_PROMPT)
 
         if result.get("error"):

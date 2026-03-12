@@ -35,6 +35,7 @@ class RiskManager:
         self.stop_loss_atr_mult: float = config["stop_loss_atr_mult"]
         self.base_risk_per_trade_pct: float = config.get("base_risk_per_trade_pct", 2.0)
         self.max_portfolio_avg_correlation: float = config.get("max_portfolio_avg_correlation", 0.6)
+        self.max_exposure_ratio: float = config.get("max_exposure_ratio", 0.30)
 
         # Graduated correlation system
         self.correlation_hard_cap: float = config.get("correlation_hard_cap", 0.85)
@@ -125,6 +126,12 @@ class RiskManager:
         if not corr_ok:
             return False, corr_reason, None
 
+        # Check 9: Exposure ratio gate
+        equity = portfolio_state.get("equity", 0.0)
+        current_er = self._calculate_exposure_ratio(open_positions, equity)
+        if current_er >= self.max_exposure_ratio:
+            return (False, f"Exposure ratio {current_er:.1%} exceeds max {self.max_exposure_ratio:.0%} — reduce positions before opening new trades", None)
+
         log.info("Order validated: %s %s", execution_order.get("direction"), asset)
         return True, "APPROVED", execution_order
 
@@ -174,6 +181,32 @@ class RiskManager:
             return sector_lower if sector_lower != "unknown" else "unknown"
         except Exception:
             return "unknown"
+
+    def _calculate_exposure_ratio(
+        self, open_positions: list[dict[str, Any]], equity: float
+    ) -> float:
+        """Calculate total capital deployed as a ratio of equity.
+
+        Returns:
+            Ratio of total position value to equity (e.g. 0.25 = 25%).
+            Returns 999.0 if equity <= 0.
+        """
+        if equity <= 0:
+            return 999.0
+
+        total_value = 0.0
+        for pos in open_positions:
+            qty = pos.get("quantity", 0)
+            if not qty:
+                continue
+            price = pos.get("current_price", 0)
+            if not price:
+                price = pos.get("entry_price", 0)
+            if not price:
+                continue
+            total_value += abs(price * qty)
+
+        return total_value / equity
 
     def _check_correlation(
         self, asset: str, open_positions: list[dict[str, Any]], confidence: float = 0.5
