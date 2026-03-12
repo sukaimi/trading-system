@@ -331,6 +331,13 @@ async def get_watchlist() -> dict[str, Any]:
         return {"assets": [], "held_count": 0, "dynamic_count": 0, "total": 0}
 
 
+@app.get("/ping")
+@app.head("/ping")
+async def ping() -> dict[str, str]:
+    """Lightweight health check for uptime monitors (UptimeRobot, etc.)."""
+    return {"status": "ok"}
+
+
 @app.get("/api/events/recent")
 async def get_recent_events() -> list[dict[str, Any]]:
     return event_bus.get_recent(50)

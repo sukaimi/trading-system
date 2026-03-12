@@ -190,6 +190,8 @@ disagreement patterns is unique to multi-agent architectures.
 | 21 | Correlation regime shift detection | Complex |
 | 22 | Full event-driven backtester | Complex |
 | 23 | Cross-instance learning (TradeHive) | Complex |
+| 24 | Google Calendar integration — earnings events, circuit breaker blocks, market hours | Simple |
+| 25 | Gmail integration — weekly reports, trade confirmations, alert escalation fallback | Medium |
 
 ---
 
@@ -247,6 +249,39 @@ disagreement patterns is unique to multi-agent architectures.
 | Warren Buffett | 5.0 | 6.0 | "A magnificent piece of engineering. Now let it trade." |
 | Michael Burry | 4.0 | 5.5 | "Show us the trades." |
 | **BOARD** | — | **6.5** | **Conditional approval. Go live Week 1.** |
+
+---
+
+---
+
+## PRODUCT LINE & PLATFORM (Phase 7+)
+
+### Tradebot Product Tiers
+| Tier | Description | Status |
+|------|------------|--------|
+| **Tradebot Quant** | Sukaimi's instance — always the most advanced, showcase of all features | Active (paper trading) |
+| **Tradebot Full** | Premium customer package — near-identical to Quant | Spec needed |
+| **Tradebot Lite** | Budget customer package — fewer features, lower LLM tier | Spec needed |
+
+**TODO:**
+- [ ] Spec Tradebot Quant vs Full vs Lite feature matrix (which modules, which LLM tiers, which assets)
+- [ ] Define pricing model for Full and Lite
+- [ ] Build tenant provisioning (VPS setup script, .env template, onboarding flow)
+- [ ] Document upgrade path: Lite → Full → Quant
+
+### TradeHive (Internal-Only Platform)
+Central platform that collects learnings from ALL Tradebot instances. Sukaimi access only.
+
+- Hosting: Separate VPS (~$5/mo)
+- Storage: SQLite → PostgreSQL at 10+ tenants
+
+**TODO:**
+- [ ] Build TradeHive API (ingest trade outcomes, principles, signal accuracy from all instances)
+- [ ] Build cross-instance learning aggregator (Edge 23 in roadmap)
+- [ ] Add TradeHive client to each Tradebot instance (phone-home on trade close)
+- [ ] Dashboard for Sukaimi: view all instances, aggregate stats, principle library
+
+**Status: PLANNING ONLY — do NOT implement until explicitly instructed.**
 
 ---
 
