@@ -54,6 +54,14 @@ PARAMETER_BOUNDS: dict[str, dict[str, tuple[float, float]]] = {
         "target_kill_rate_pct": (10, 50),
         "target_false_kill_rate_pct": (10, 40),
     },
+    "self_healer": {
+        "consecutive_failure_threshold": (1, 10),
+        "stale_hours_threshold": (6, 72),
+        "failure_rate_threshold": (0.20, 0.80),
+        "no_trade_hours_threshold": (2, 24),
+        "spend_rate_multiplier": (1.5, 5.0),
+        "overdue_multiplier": (1.5, 5.0),
+    },
 }
 
 # Learning system data files (read-only — produced by each learning module)

@@ -274,6 +274,8 @@ Optional: DASHBOARD_PORT (default 8080), DASHBOARD_ALLOWED_ORIGINS, GA4_MEASUREM
 - **Multi-tenant**: Each tenant must have their own GA property. Set `GA4_MEASUREMENT_ID` and `GA4_API_SECRET` in each tenant's `.env`. Do NOT reuse across deployments — traffic will be mixed.
 - **Sukaimi's property**: `G-3DWEFFH8S4` / `1n7J8BhAQiC_R_rXhkvWrA` (set in VPS `.env`, not hardcoded)
 
+<!-- AUTO-HEALER: Do not edit below this line. Auto-generated entries from SelfHealer. -->
+
 ## Product Family
 - **Tradebot** = product name (the trading system)
 - **Tradebot Quant** = Sukaimi's instance, always the most advanced. The showcase. (Formerly 'Queen' — renamed to 'Quant' for quantitative trading connotation)

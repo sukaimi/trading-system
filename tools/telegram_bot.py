@@ -153,3 +153,26 @@ class TelegramNotifier:
             self._run_async(self._send_message("\n".join(lines)))
         except Exception as e:
             log.error("Failed to send optimization summary: %s", e)
+
+    def send_healer_alert(self, incident: dict[str, Any]) -> None:
+        """Send self-healer incident notification."""
+        if not self.enabled:
+            log.debug("Telegram healer alert (disabled)")
+            return
+
+        severity = incident.get("severity", "warning").upper()
+        emoji = {"INFO": "ℹ️", "WARNING": "⚠️", "CRITICAL": "🚨"}.get(severity, "🔧")
+        text = (
+            f"{emoji} <b>SELF-HEALER [{severity}]</b>\n\n"
+            f"Monitor: {incident.get('monitor_name', '?')}\n"
+            f"Trigger: {incident.get('trigger_summary', 'Unknown')}\n"
+            f"Auto-fix: {incident.get('auto_response', 'none')}\n"
+            f"Root cause: {incident.get('root_cause', 'under investigation')}\n"
+            f"Prevention: {incident.get('prevention', 'TBD')}\n"
+            f"Occurrence: #{incident.get('occurrence_count', 1)}"
+        )
+
+        try:
+            self._run_async(self._send_message(text))
+        except Exception as e:
+            log.error("Failed to send healer alert: %s", e)

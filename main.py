@@ -30,6 +30,7 @@ from core.pipeline import TradingPipeline
 from core.portfolio import PortfolioState
 from core.risk_manager import RiskManager
 from core.self_optimizer import SelfOptimizer
+from core.self_healer import SelfHealer
 from dashboard.server import start_dashboard
 from core.broker_sync import BrokerReconciler
 from tools.telegram_bot import TelegramNotifier
@@ -129,6 +130,16 @@ def main():
     )
     log.info("Trading pipeline initialized")
 
+    # 6b. Initialize self-healer
+    self_healer = SelfHealer(
+        pipeline=pipeline,
+        portfolio=portfolio,
+        cost_tracker=cost_tracker,
+        telegram=telegram,
+        llm_client=llm_client,
+    )
+    log.info("Self-healer initialized")
+
     # Broker reconciliation on startup
     reconciler = BrokerReconciler(executor=executor, portfolio=portfolio, telegram=telegram)
     auto_fix = os.getenv("BROKER_SYNC_AUTO_FIX", "false").lower() == "true"
@@ -224,6 +235,14 @@ def main():
         pipeline.check_holding_periods()
         # Recalculate equity with live market prices
         pipeline.recalculate_equity()
+        # Self-healing monitors (Tier 0 — pure Python, every 5 min)
+        try:
+            healer_actions = self_healer.run_all_monitors()
+            if healer_actions:
+                log.info("Self-healer took %d actions", len(healer_actions))
+        except Exception as e:
+            log.error("Self-healer failed (non-fatal): %s", e)
+
         # Run circuit breaker check alongside heartbeat
         pipeline.run_circuit_breaker_check()
 
@@ -275,6 +294,11 @@ def main():
             weekly_package = journal.assemble_weekly_package(
                 week_ending, portfolio_state=portfolio_state
             )
+            # Include self-healer assessment
+            try:
+                weekly_package["healer_assessment"] = self_healer.weekly_self_assessment()
+            except Exception as e:
+                log.warning("Healer assessment failed: %s", e)
             strategist.review_week(weekly_package)
         except Exception as e:
             log.error("Weekly review failed: %s", e)
@@ -309,7 +333,7 @@ def main():
     # 12. Start dashboard server
     dashboard_port = int(os.getenv("DASHBOARD_PORT", "8080"))
     dashboard_host = os.getenv("DASHBOARD_HOST", "127.0.0.1")
-    start_dashboard(portfolio, heartbeat, cost_tracker, host=dashboard_host, port=dashboard_port, pipeline=pipeline)
+    start_dashboard(portfolio, heartbeat, cost_tracker, host=dashboard_host, port=dashboard_port, pipeline=pipeline, self_healer=self_healer)
 
     # 13. Pre-flight API connectivity check
     if not llm_client.mock_mode:

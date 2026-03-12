@@ -1,0 +1,51 @@
+{
+  "enabled": true,
+  "monitors": {
+    "feed_health": {
+      "enabled": true,
+      "consecutive_failure_threshold": 3,
+      "stale_hours_threshold": 24,
+      "investigation_cooldown_hours": 6
+    },
+    "thesis_failure": {
+      "enabled": true,
+      "failure_rate_threshold": 0.50,
+      "min_sample_size": 4,
+      "rolling_window_hours": 1,
+      "investigation_cooldown_hours": 6
+    },
+    "position_saturation": {
+      "enabled": true,
+      "no_trade_hours_threshold": 6,
+      "min_signals_in_window": 1,
+      "investigation_cooldown_hours": 6
+    },
+    "scheduler_health": {
+      "enabled": true,
+      "overdue_multiplier": 2.0,
+      "investigation_cooldown_hours": 6
+    },
+    "cost_anomaly": {
+      "enabled": true,
+      "spend_rate_multiplier": 2.0,
+      "duplicate_window_minutes": 5,
+      "investigation_cooldown_hours": 6
+    },
+    "config_integrity": {
+      "enabled": true,
+      "investigation_cooldown_hours": 6
+    }
+  },
+  "learning": {
+    "pattern_retention_days": 90,
+    "escalation_threshold_occurrences": 3,
+    "fix_success_window_cycles": 2,
+    "max_patterns": 500,
+    "confidence_threshold_for_auto_fix": 0.8
+  },
+  "watchdog": {
+    "max_actions_per_hour": 10,
+    "max_exceptions_per_hour": 3,
+    "cooldown_hours": 6
+  }
+}

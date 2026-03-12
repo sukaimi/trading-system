@@ -90,6 +90,25 @@ class NewsFetcher:
         self._feed_last_new_article: dict[str, str] = {}
 
     # ------------------------------------------------------------------
+    # Public properties for self-healer monitor access
+    # ------------------------------------------------------------------
+
+    @property
+    def feed_failures(self) -> dict[str, dict]:
+        """Expose feed failure tracking for self-healer (returns copy)."""
+        return dict(self._feed_failures)
+
+    @property
+    def feed_last_new_article(self) -> dict[str, str]:
+        """Expose stale feed tracking for self-healer (returns copy)."""
+        return dict(self._feed_last_new_article)
+
+    @property
+    def cycle_count(self) -> int:
+        """Current fetch cycle count."""
+        return self._cycle_count
+
+    # ------------------------------------------------------------------
     # Item 3: Persistent dedup helpers
     # ------------------------------------------------------------------
 

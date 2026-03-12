@@ -9,6 +9,7 @@ See TRADING_AGENT_PRD.md Section 4 for the communication map.
 from __future__ import annotations
 
 import json
+import os
 import uuid
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
@@ -171,6 +172,39 @@ class TradingPipeline:
         s["execution_rate"] = round(s["executed"] / generated * 100, 1) if generated > 0 else 0.0
 
         return s
+
+    def get_healer_data(self) -> dict[str, Any]:
+        """Return data needed by self-healer monitors."""
+        feed_health = {}
+        try:
+            fetcher = getattr(self._news_scout, '_fetcher', None)
+            if fetcher:
+                for name, info in fetcher.feed_failures.items():
+                    feed_health[name] = {
+                        "consecutive_failures": info.get("consecutive_failures", 0),
+                        "last_new_article": fetcher.feed_last_new_article.get(name),
+                    }
+        except Exception:
+            pass
+
+        last_trade = None
+        try:
+            data_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), "data")
+            journal_path = Path(data_dir) / "trade_journal.json"
+            if journal_path.exists():
+                with open(journal_path) as f:
+                    entries = json.load(f)
+                if entries:
+                    last_trade = entries[-1].get("timestamp_open", entries[-1].get("timestamp"))
+        except Exception:
+            pass
+
+        return {
+            "feed_health": feed_health,
+            "funnel_stats": self.get_funnel_stats(),
+            "last_trade_timestamp": last_trade,
+            "open_positions": self._portfolio.open_positions,
+        }
 
     def run_chart_scan(self) -> list[SignalAlert]:
         """Run a technical chart scan and process any signals found.

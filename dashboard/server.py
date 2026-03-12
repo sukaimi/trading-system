@@ -38,14 +38,16 @@ _portfolio: Any = None
 _heartbeat: Any = None
 _cost_tracker: Any = None
 _pipeline: Any = None
+_self_healer: Any = None
 
 
-def _set_refs(portfolio: Any, heartbeat: Any, cost_tracker: Any, pipeline: Any = None) -> None:
-    global _portfolio, _heartbeat, _cost_tracker, _pipeline
+def _set_refs(portfolio: Any, heartbeat: Any, cost_tracker: Any, pipeline: Any = None, self_healer: Any = None) -> None:
+    global _portfolio, _heartbeat, _cost_tracker, _pipeline, _self_healer
     _portfolio = portfolio
     _heartbeat = heartbeat
     _cost_tracker = cost_tracker
     _pipeline = pipeline
+    _self_healer = self_healer
 
 
 # ── REST endpoints — initial data load ─────────────────────────────────
@@ -367,6 +369,39 @@ async def get_watchlist() -> dict[str, Any]:
         return {"assets": [], "held_count": 0, "dynamic_count": 0, "total": 0}
 
 
+@app.get("/api/self-healer/status")
+async def get_healer_status() -> dict[str, Any]:
+    """Return self-healer monitor status and learning metrics."""
+    if _self_healer:
+        try:
+            return _self_healer.status()
+        except Exception as e:
+            log.warning("Self-healer status failed: %s", e)
+    return {"enabled": False, "monitors": {}, "patterns": 0, "recent_actions": []}
+
+
+@app.get("/api/self-healer/incidents")
+async def get_healer_incidents(limit: int = 50) -> list[dict[str, Any]]:
+    """Return recent incident reports from self-healer."""
+    incidents_dir = os.path.join(DATA_DIR, "incidents")
+    if not os.path.isdir(incidents_dir):
+        return []
+    try:
+        files = sorted(
+            [f for f in os.listdir(incidents_dir) if f.endswith(".md")],
+            reverse=True,
+        )[:limit]
+        results = []
+        for fname in files:
+            with open(os.path.join(incidents_dir, fname)) as f:
+                content = f.read()
+            results.append({"filename": fname, "content": content})
+        return results
+    except Exception as e:
+        log.warning("Self-healer incidents fetch failed: %s", e)
+        return []
+
+
 @app.get("/ping")
 @app.head("/ping")
 async def ping() -> dict[str, str]:
@@ -531,9 +566,10 @@ def start_dashboard(
     host: str = "127.0.0.1",
     port: int = 8080,
     pipeline: Any = None,
+    self_healer: Any = None,
 ) -> threading.Thread:
     """Start the dashboard server in a background daemon thread."""
-    _set_refs(portfolio, heartbeat, cost_tracker, pipeline=pipeline)
+    _set_refs(portfolio, heartbeat, cost_tracker, pipeline=pipeline, self_healer=self_healer)
 
     def _run() -> None:
         loop = asyncio.new_event_loop()

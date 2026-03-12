@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from enum import Enum
-from typing import Optional
+from typing import Any, Optional
 
 from pydantic import BaseModel, Field, field_validator
 
@@ -437,3 +437,66 @@ class PreventionRule(BaseModel):
     times_matched: int = 0
     asset_pattern: str = "ALL"
     active: bool = True
+
+
+# ── Self-Healer Schemas ──────────────────────────────────────────────
+
+
+class MonitorSeverity(str, Enum):
+    INFO = "info"
+    WARNING = "warning"
+    CRITICAL = "critical"
+
+
+class MonitorResult(BaseModel):
+    """Output from a single monitor check."""
+    monitor_name: str
+    triggered: bool = False
+    severity: MonitorSeverity = MonitorSeverity.INFO
+    details: dict[str, Any] = Field(default_factory=dict)
+    auto_response: str = ""
+    timestamp: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+
+
+class InvestigationFinding(BaseModel):
+    """Tech or finance investigation result."""
+    dimension: str  # "tech" or "finance"
+    finding: str
+    root_cause: str = ""
+    recommendation: str = ""
+    confidence: float = Field(ge=0.0, le=1.0, default=0.5)
+
+
+class IncidentReport(BaseModel):
+    """Full incident report after investigation."""
+    incident_id: str
+    timestamp: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    monitor_name: str
+    severity: MonitorSeverity = MonitorSeverity.WARNING
+    trigger_details: dict[str, Any] = Field(default_factory=dict)
+    auto_response: str = ""
+    investigations: list[InvestigationFinding] = Field(default_factory=list)
+    resolution: str = ""
+    prevention: str = ""
+    status: str = "open"  # open, resolved, recurring
+    occurrence_count: int = 1
+    asset: str = ""
+
+
+class HealerPattern(BaseModel):
+    """A learned incident pattern."""
+    pattern_id: str
+    monitor_name: str
+    signature: str
+    first_seen: datetime
+    last_seen: datetime
+    occurrence_count: int = 1
+    known_fix: str = ""
+    fix_success_count: int = 0
+    fix_failure_count: int = 0
+    mean_time_to_detect_sec: float = 0.0
+    mean_time_to_resolve_sec: float = 0.0
+    false_positive: bool = False
+    asset: str = ""
+    time_of_day_bucket: str = ""
+    regime: str = ""
