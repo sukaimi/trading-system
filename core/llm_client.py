@@ -73,10 +73,15 @@ class LLMClient:
             return self._get_mock_response("deepseek", response_schema)
 
         try:
-            raw = self._call_openai_compatible("deepseek", prompt, system_prompt)
+            raw, usage = self._call_openai_compatible("deepseek", prompt, system_prompt)
             result = self._parse_json_response(raw, response_schema)
-            if self._cost_tracker and isinstance(result, dict) and "error" not in result:
-                self._cost_tracker.record("deepseek", "pipeline", system_prompt + "\n" + prompt, raw)
+            # Always track — DeepSeek charges regardless of parse success
+            if self._cost_tracker:
+                self._cost_tracker.record(
+                    "deepseek", "pipeline", system_prompt + "\n" + prompt, raw,
+                    input_tokens=usage.get("prompt_tokens"),
+                    output_tokens=usage.get("completion_tokens"),
+                )
             return result
         except Exception as e:
             log.error("DeepSeek call failed: %s", e)
@@ -93,10 +98,14 @@ class LLMClient:
             return self._get_mock_response("kimi", response_schema)
 
         try:
-            raw = self._call_openai_compatible("kimi", prompt, system_prompt)
+            raw, usage = self._call_openai_compatible("kimi", prompt, system_prompt)
             result = self._parse_json_response(raw, response_schema)
-            if self._cost_tracker and "error" not in result:
-                self._cost_tracker.record("kimi", "pipeline", system_prompt + "\n" + prompt, raw)
+            if self._cost_tracker:
+                self._cost_tracker.record(
+                    "kimi", "pipeline", system_prompt + "\n" + prompt, raw,
+                    input_tokens=usage.get("prompt_tokens"),
+                    output_tokens=usage.get("completion_tokens"),
+                )
             return result
         except Exception as e:
             log.error("Kimi call failed: %s", e)
@@ -144,9 +153,16 @@ class LLMClient:
             data = resp.json()
             content = data.get("content", [{}])
             raw_text = content[0].get("text", "{}") if content else "{}"
+            # Extract actual token usage from Anthropic response
+            usage = data.get("usage", {})
             result = self._parse_json_response(raw_text, response_schema)
-            if self._cost_tracker and "error" not in result:
-                self._cost_tracker.record("anthropic", "pipeline", system_prompt + "\n" + prompt, raw_text)
+            # Always track — Anthropic charges regardless of parse success
+            if self._cost_tracker:
+                self._cost_tracker.record(
+                    "anthropic", "pipeline", system_prompt + "\n" + prompt, raw_text,
+                    input_tokens=usage.get("input_tokens"),
+                    output_tokens=usage.get("output_tokens"),
+                )
             return result
         except Exception as e:
             log.error("Anthropic call failed: %s", e)
@@ -176,8 +192,15 @@ class LLMClient:
         # Try Gemini fallback
         if not self.mock_mode:
             try:
-                raw = self._call_gemini(prompt, system_prompt)
+                raw, usage = self._call_gemini(prompt, system_prompt)
                 result = self._parse_json_response(raw, response_schema)
+                # Always track Gemini calls
+                if self._cost_tracker:
+                    self._cost_tracker.record(
+                        "gemini", "pipeline", system_prompt + "\n" + prompt, raw,
+                        input_tokens=usage.get("prompt_tokens"),
+                        output_tokens=usage.get("completion_tokens"),
+                    )
                 if "error" not in result:
                     return result
             except Exception as e:
@@ -193,8 +216,12 @@ class LLMClient:
 
     def _call_openai_compatible(
         self, provider: str, prompt: str, system_prompt: str
-    ) -> str:
-        """Make a chat completion call to an OpenAI-compatible API."""
+    ) -> tuple[str, dict[str, int]]:
+        """Make a chat completion call to an OpenAI-compatible API.
+
+        Returns (content_text, usage_dict) where usage_dict has
+        'prompt_tokens' and 'completion_tokens' from the API response.
+        """
         config = PROVIDERS[provider]
         api_key = os.getenv(config["env_key"], "")
         if not api_key:
@@ -224,10 +251,16 @@ class LLMClient:
             raise ValueError(f"{provider} API returned {resp.status_code}: {resp.text[:200]}")
 
         data = resp.json()
-        return data["choices"][0]["message"]["content"]
+        content = data["choices"][0]["message"]["content"]
+        usage = data.get("usage", {})
+        return content, usage
 
-    def _call_gemini(self, prompt: str, system_prompt: str) -> str:
-        """Call Gemini Flash as fallback."""
+    def _call_gemini(self, prompt: str, system_prompt: str) -> tuple[str, dict[str, int]]:
+        """Call Gemini Flash as fallback.
+
+        Returns (content_text, usage_dict) where usage_dict has
+        'prompt_tokens' and 'completion_tokens' extracted from usageMetadata.
+        """
         api_key = os.getenv(PROVIDERS["gemini"]["env_key"], "")
         if not api_key:
             raise ValueError("GOOGLE_API_KEY not set")
@@ -249,7 +282,15 @@ class LLMClient:
         data = resp.json()
         candidates = data.get("candidates", [{}])
         parts = candidates[0].get("content", {}).get("parts", [{}]) if candidates else [{}]
-        return parts[0].get("text", "{}") if parts else "{}"
+        content = parts[0].get("text", "{}") if parts else "{}"
+
+        # Extract token usage from Gemini's usageMetadata
+        meta = data.get("usageMetadata", {})
+        usage = {
+            "prompt_tokens": meta.get("promptTokenCount", 0),
+            "completion_tokens": meta.get("candidatesTokenCount", 0),
+        }
+        return content, usage
 
     def _parse_json_response(
         self, raw_text: str, schema: Type[BaseModel] | None = None
