@@ -23,6 +23,7 @@ from core.schemas import (
     TimeHorizon,
     TradeThesis,
 )
+from tools.alpha_vantage import AlphaVantageClient, get_av_client
 from tools.correlation import CorrelationAnalyzer
 from tools.market_data import MarketDataFetcher
 from tools.technical_indicators import TechnicalIndicators
@@ -193,7 +194,7 @@ class MarketAnalyst:
         vol_avg_20 = sum(volumes[-20:]) / 20 if len(volumes) >= 20 else 0
         vol_ratio = volumes[-1] / vol_avg_20 if vol_avg_20 > 0 else 0
 
-        return {
+        result = {
             "current_price": current_price,
             "price_change_7d": ((current_price - price_7d_ago) / price_7d_ago * 100)
             if price_7d_ago
@@ -205,7 +206,44 @@ class MarketAnalyst:
             "sma_50": self._ti.sma(closes, 50),
             "sma_200": self._ti.sma(closes, 200),
             "volume_vs_avg": round(vol_ratio, 2),
+            "vwap": self._ti.vwap(highs, lows, closes, volumes),
+            "stochastic": self._ti.stochastic(highs, lows, closes),
+            "obv": self._ti.obv(closes, volumes),
         }
+
+        # Alpha Vantage sentiment (P0: zero extra API calls)
+        try:
+            av = get_av_client()
+            sentiment = av.ticker_sentiment(asset)
+            if sentiment:
+                result["av_sentiment"] = sentiment["score"]
+                result["av_sentiment_label"] = sentiment["label"]
+        except Exception:
+            pass  # Graceful fallback — omit if unavailable
+
+        # Alpha Vantage earnings context (P1)
+        try:
+            from core.earnings_calendar import EarningsCalendar
+            cal = EarningsCalendar()
+            days = cal.days_until_earnings(asset)
+            if days is not None:
+                result["days_until_earnings"] = days
+            eps_history = cal.get_eps_history(asset)
+            if eps_history:
+                result["eps_history"] = eps_history
+        except Exception:
+            pass
+
+        # Alpha Vantage sector performance (P2)
+        try:
+            av = get_av_client()
+            rankings = av.get_sector_rankings("1mo")
+            if rankings:
+                result["sector_rankings"] = rankings
+        except Exception:
+            pass
+
+        return result
 
     def _build_thesis(
         self,

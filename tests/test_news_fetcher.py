@@ -57,20 +57,21 @@ class TestFetchAllRSS:
 
 class TestFetchAlphaVantage:
     def test_no_api_key(self, nf):
-        nf._av_key = ""
+        mock_av = MagicMock()
+        mock_av.has_key = False
+        nf._av_client = mock_av
         assert nf.fetch_alpha_vantage_news() == []
 
     def test_success(self, nf):
-        nf._av_key = "test-key"
-        mock_resp = MagicMock()
-        mock_resp.status_code = 200
-        mock_resp.json.return_value = {
+        mock_av = MagicMock()
+        mock_av.has_key = True
+        mock_av.news_sentiment.return_value = {
             "feed": [
                 {"title": "Fed holds rates", "summary": "...", "url": "http://c.com", "time_published": "2026-03-01", "source": "Reuters"},
             ]
         }
-        with patch.object(nf._session, "get", return_value=mock_resp):
-            articles = nf.fetch_alpha_vantage_news(["BTC"])
+        nf._av_client = mock_av
+        articles = nf.fetch_alpha_vantage_news(["BTC"])
         assert len(articles) == 1
 
 

@@ -18,6 +18,7 @@ import feedparser
 import requests
 
 from core.logger import setup_logger
+from tools.alpha_vantage import AlphaVantageClient, get_av_client
 
 log = setup_logger("trading.news_fetcher")
 
@@ -232,13 +233,14 @@ class NewsFetcher:
     def fetch_alpha_vantage_news(
         self, tickers: list[str] | None = None
     ) -> list[dict[str, str]]:
-        """Fetch news from Alpha Vantage News API (5/min rate limit)."""
-        if not self._av_key:
-            log.debug("Alpha Vantage API key not set — skipping")
-            return []
+        """Fetch news from Alpha Vantage News API via shared AV client.
 
-        if not self._check_av_rate_limit():
-            log.warning("Alpha Vantage rate limit reached — skipping")
+        Delegates to AlphaVantageClient for rate limiting and caching.
+        Also extracts per-ticker sentiment data for downstream use.
+        """
+        av_client = self._get_av_client()
+        if not av_client.has_key:
+            log.debug("Alpha Vantage API key not set — skipping")
             return []
 
         if tickers is None:
@@ -248,51 +250,42 @@ class NewsFetcher:
             except Exception:
                 tickers = list(AV_TICKERS.keys())
 
-        av_tickers = ",".join(AV_TICKERS.get(t, t) for t in tickers)
-
-        try:
-            resp = self._session.get(
-                ALPHA_VANTAGE_URL,
-                params={
-                    "function": "NEWS_SENTIMENT",
-                    "tickers": av_tickers,
-                    "apikey": self._av_key,
-                },
-                timeout=15,
-            )
-            self._av_timestamps.append(time.time())
-
-            if resp.status_code != 200:
-                log.warning("Alpha Vantage returned status %d", resp.status_code)
-                return []
-
-            data = resp.json()
-            articles = []
-            for item in data.get("feed", []):
-                article = self._standardize_article(
-                    title=item.get("title", ""),
-                    summary=item.get("summary", ""),
-                    link=item.get("url", ""),
-                    published=item.get("time_published", ""),
-                    source=item.get("source", "alpha_vantage"),
-                )
-                article["sentiment_score"] = item.get(
-                    "overall_sentiment_score", ""
-                )
-                # Find best relevance score among requested tickers
-                relevance = ""
-                for ts in item.get("ticker_sentiment", []):
-                    ticker_sym = ts.get("ticker", "")
-                    if ticker_sym in av_tickers.split(","):
-                        relevance = ts.get("relevance_score", "")
-                        break
-                article["relevance_score"] = relevance
-                articles.append(article)
-            log.info("Fetched %d articles from Alpha Vantage", len(articles))
-            return articles
-        except Exception as e:
-            log.warning("Alpha Vantage fetch failed: %s", e)
+        data = av_client.news_sentiment(tickers)
+        if not data:
             return []
+
+        av_tickers_set = set(AV_TICKERS.get(t, t) for t in tickers)
+
+        articles = []
+        for item in data.get("feed", []):
+            article = self._standardize_article(
+                title=item.get("title", ""),
+                summary=item.get("summary", ""),
+                link=item.get("url", ""),
+                published=item.get("time_published", ""),
+                source=item.get("source", "alpha_vantage"),
+            )
+            article["sentiment_score"] = item.get(
+                "overall_sentiment_score", ""
+            )
+            # Find best relevance score among requested tickers
+            relevance = ""
+            for ts in item.get("ticker_sentiment", []):
+                ticker_sym = ts.get("ticker", "")
+                if ticker_sym in av_tickers_set:
+                    relevance = ts.get("relevance_score", "")
+                    break
+            article["relevance_score"] = relevance
+            articles.append(article)
+
+        log.info("Fetched %d articles from Alpha Vantage", len(articles))
+        return articles
+
+    def _get_av_client(self) -> AlphaVantageClient:
+        """Get the Alpha Vantage client (allows override for testing)."""
+        if not hasattr(self, "_av_client") or self._av_client is None:
+            self._av_client = get_av_client()
+        return self._av_client
 
     def fetch_crypto_news(self) -> list[dict[str, str]]:
         """Fetch crypto news from CryptoCompare."""

@@ -368,6 +368,122 @@ class TechnicalIndicators:
             "level": level,
         }
 
+    def vwap(
+        self,
+        highs: list[float],
+        lows: list[float],
+        closes: list[float],
+        volumes: list[float],
+    ) -> float:
+        """Calculate Volume Weighted Average Price.
+
+        VWAP = cumsum(typical_price * volume) / cumsum(volume)
+        where typical_price = (high + low + close) / 3.
+
+        Args:
+            highs/lows/closes: OHLC data, same length, oldest first.
+            volumes: Volume data, same length.
+
+        Returns:
+            VWAP value. Returns 0.0 if insufficient data or zero total volume.
+        """
+        n = min(len(highs), len(lows), len(closes), len(volumes))
+        if n == 0:
+            return 0.0
+
+        h = np.array(highs[:n], dtype=float)
+        l = np.array(lows[:n], dtype=float)
+        c = np.array(closes[:n], dtype=float)
+        v = np.array(volumes[:n], dtype=float)
+
+        typical_price = (h + l + c) / 3.0
+        cum_tp_vol = np.cumsum(typical_price * v)
+        cum_vol = np.cumsum(v)
+
+        if cum_vol[-1] == 0:
+            return 0.0
+
+        return float(cum_tp_vol[-1] / cum_vol[-1])
+
+    def stochastic(
+        self,
+        highs: list[float],
+        lows: list[float],
+        closes: list[float],
+        k_period: int = 14,
+        d_period: int = 3,
+    ) -> dict[str, float]:
+        """Calculate Stochastic Oscillator (%K and %D).
+
+        %K = (close - lowest_low_N) / (highest_high_N - lowest_low_N) * 100
+        %D = SMA(%K, d_period)
+
+        Args:
+            highs/lows/closes: OHLC data, same length, oldest first.
+            k_period: Lookback for %K (default 14).
+            d_period: SMA period for %D (default 3).
+
+        Returns:
+            {"k": float, "d": float} — both 0-100.
+            Returns zeroes if insufficient data.
+        """
+        n = min(len(highs), len(lows), len(closes))
+        if n < k_period:
+            return {"k": 0.0, "d": 0.0}
+
+        h = np.array(highs[:n], dtype=float)
+        l = np.array(lows[:n], dtype=float)
+        c = np.array(closes[:n], dtype=float)
+
+        # Calculate %K series for the last d_period values
+        k_values: list[float] = []
+        start = max(0, n - k_period - d_period + 1)
+        for i in range(start, n):
+            window_start = max(0, i - k_period + 1)
+            highest = float(np.max(h[window_start : i + 1]))
+            lowest = float(np.min(l[window_start : i + 1]))
+            rng = highest - lowest
+            if rng == 0:
+                k_values.append(50.0)
+            else:
+                k_values.append(float((c[i] - lowest) / rng * 100.0))
+
+        k_val = k_values[-1] if k_values else 0.0
+
+        # %D = SMA of last d_period %K values
+        if len(k_values) >= d_period:
+            d_val = float(np.mean(k_values[-d_period:]))
+        else:
+            d_val = k_val
+
+        return {"k": round(k_val, 4), "d": round(d_val, 4)}
+
+    def obv(self, closes: list[float], volumes: list[float]) -> float:
+        """Calculate On-Balance Volume.
+
+        OBV = cumsum(sign(delta_close) * volume)
+
+        Args:
+            closes: Closing prices, oldest first.
+            volumes: Volume data, same length as closes.
+
+        Returns:
+            OBV value (cumulative). Returns 0.0 if insufficient data.
+        """
+        n = min(len(closes), len(volumes))
+        if n < 2:
+            return 0.0
+
+        c = np.array(closes[:n], dtype=float)
+        v = np.array(volumes[:n], dtype=float)
+
+        deltas = np.diff(c)
+        signs = np.sign(deltas)
+
+        # OBV starts at 0, then accumulates sign * volume
+        obv_val = float(np.sum(signs * v[1:]))
+        return obv_val
+
     def _ema(self, prices: list[float], period: int) -> list[float]:
         """Calculate Exponential Moving Average series.
 
