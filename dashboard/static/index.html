@@ -1545,7 +1545,9 @@ function renderPortfolio() {
   eqEl.style.color = pnl > 0 ? 'var(--profit)' : pnl < 0 ? 'var(--loss)' : 'var(--foreground)';
 
   document.getElementById('drawdown').textContent = fmtPct(p.drawdown_from_peak_pct || 0);
-  document.getElementById('win-loss').textContent = (p.total_wins || 0) + ' / ' + (p.total_losses || 0) + ' (' + (p.total_trades || 0) + ')';
+  const tw = p.total_wins || 0, tl = p.total_losses || 0, tt = p.total_trades || 0;
+  const be = tt - tw - tl;
+  document.getElementById('win-loss').textContent = tw + 'W / ' + tl + 'L' + (be > 0 ? ' / ' + be + 'BE' : '') + ' (' + tt + ')';
   document.getElementById('pos-count').textContent = (p.open_positions || []).length;
 }
 
