@@ -740,7 +740,10 @@ class SelfHealer:
         elif monitor_name == "position_saturation":
             key_parts.append("saturation")
         elif monitor_name == "scheduler_health":
-            overdue = sorted(details.get("overdue_tasks", []))
+            overdue_raw = details.get("overdue_tasks", [])
+            overdue = sorted(
+                t["task"] if isinstance(t, dict) else str(t) for t in overdue_raw
+            )
             key_parts.append(f"tasks:{','.join(overdue[:5])}")
         elif monitor_name == "cost_anomaly":
             # Group by anomaly type

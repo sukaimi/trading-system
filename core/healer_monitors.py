@@ -130,6 +130,8 @@ class FeedHealthMonitor(BaseMonitor):
             details: dict[str, Any] = {}
 
             for feed_name, info in feed_health.items():
+                if not isinstance(info, dict):
+                    continue
                 failures = info.get("consecutive_failures", 0)
                 last_article = info.get("last_new_article")
 
